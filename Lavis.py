@@ -1,11 +1,11 @@
-# ===lavis.py (Fixed & Aligned) ==
+# ===lavis.py (Fixed ) ==
 import os
 import sys
 import re
 import time
 import logging
 import threading
-from playsound import playsound
+from playsound import playsound 
 from fuzzywuzzy import fuzz
 
 from LAVIS.jarvis.voice.speaker import speak
