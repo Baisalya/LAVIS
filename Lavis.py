@@ -1,12 +1,11 @@
-# ===lavis.py (Fixed ) ==
+# === lavis.py ===
 import os
-import sys
 import re
 import time
 import logging
-import threading
 from playsound import playsound 
 from fuzzywuzzy import fuzz
+import threading
 
 from LAVIS.jarvis.voice.speaker import speak
 from LAVIS.jarvis.commands.commands import handle_command
@@ -17,34 +16,27 @@ from LAVIS.jarvis.voice.recognizer import start_background_listening, stop_backg
 from LAVIS.jarvis.nlp.intent_detector import detect_intent
 from LAVIS.jarvis.web.fallback import handle_fallback
 
-# === HUD Integration ===
-from jarvis_hud.main import SciFiApp, update_hud_text
-
+from jarvis_hud.main import update_hud_text
 from LAVIS.hud_display import show_fallback_in_hud, show_hud_reply, show_hud_command
 from LAVIS.jarvis.commands.apps import get_start_menu_apps
 
-# === CONFIG ===
 WAKE_WORD = "jarvis"
 WAKE_UP_PHRASE = "jarvis wake up"
 SLEEP_PHRASE = "jarvis sleep"
 AUDIO_STARTUP = "lavis start.mp3"
 
-session_state = "sleep"  # States: sleep, normal, conversation, learning
-get_start_menu_apps()  # 🔁 Preload app list into cache
-start_background_listening()
-def start_hud():
-    app = SciFiApp()
-    app.run()
+session_state = "sleep"
 
 def hud_speak(message: str):
+    show_hud_reply("...", typing=True)
+    time.sleep(0.3)
     show_hud_reply(message)
     speak(message)
 
 def welcome():
     if os.path.exists(AUDIO_STARTUP):
         playsound(AUDIO_STARTUP)
-    msg = "Presence confirmed. Let’s make things happen when you're ready."
-    hud_speak(msg)
+    hud_speak("Presence confirmed. Let’s make things happen when you're ready.")
 
 def extract_app_name(command: str) -> str:
     match = re.search(r"open (.+)", command)
@@ -55,31 +47,33 @@ def check_wake_phrase(text):
     text = text.lower()
     if WAKE_UP_PHRASE in text:
         session_state = "normal"
-        hud_speak("systems operational. Awaiting your instructions.")
+        hud_speak("Systems operational. Awaiting your instructions.")
         return True
     elif SLEEP_PHRASE in text:
         session_state = "sleep"
         hud_speak("Okay sir, I’m going to sleep.")
         return True
     return False
-
 def main():
     global session_state
 
-    if not os.path.exists("jarvis.sqlite3"):
-        train_chatbot()
+    try:
+        if not os.path.exists("jarvis.sqlite3"):
+            train_chatbot()
 
-    welcome()
-    session_state = "sleep"
-    start_background_listening()
+        get_start_menu_apps()
+        welcome()
+        start_background_listening()
 
-    while True:
-        try:
+        while True:
             if not command_queue.empty():
                 input_text = command_queue.get()
+
+                # ✅ Instantly show what was said in the HUD
+                show_hud_command(input_text, typing=True)
+                time.sleep(0.1)
+
                 print("🎤 Heard:", input_text)
-                show_hud_command(input_text, typing=False)
-                time.sleep(0.05)
 
                 if check_wake_phrase(input_text):
                     continue
@@ -125,12 +119,11 @@ def main():
 
                 elif intent == "conversation":
                     if len(command.strip().split()) < 3:
-                        print("🛑 Too short to trigger conversation mode.")
                         show_hud_reply("I didn't catch a full sentence. Please repeat.")
                         continue
                     session_state = "conversation"
                     show_hud_reply("Responding to conversation...")
-                    # You can insert chatbot logic here if desired
+                    # You can integrate chatbot reply here if needed
                     continue
 
                 elif handle_fallback(command):
@@ -151,22 +144,21 @@ def main():
             else:
                 time.sleep(0.1)
 
-        except KeyboardInterrupt:
-            stop_background_listening()
-            hud_speak("Jarvis shutting down.")
-            break
+    except KeyboardInterrupt:
+        stop_background_listening()
+        hud_speak("Jarvis shutting down.")
 
-        except Exception as e:
-            logging.exception("❌ Error:")
-            update_hud_text(str(e), category="error")
-            speak("Something went wrong.")
-
-if __name__ == "__main__":
-    try:
-        hud_thread = threading.Thread(target=start_hud, daemon=True)
-        hud_thread.start()
-        main()
     except Exception as e:
-        logging.exception("🔥 Startup error:")
+        logging.exception("❌ Error in main loop:")
         update_hud_text(str(e), category="error")
-        speak("There was a problem starting up.")
+        speak("Something went wrong.")
+if __name__ == "__main__":
+    print("🧪 Running Lavis in console-only mode (no HUD)")
+
+    # === HUD function overrides for console testing ===
+    def show_hud_command(text, typing=True): print(f"🧪 [COMMAND] {text}")
+    def show_hud_reply(text, typing=True): print(f"🧪 [REPLY] {text}")
+    def show_fallback_in_hud(text): print(f"🧪 [FALLBACK] {text}")
+    def update_hud_text(text, category="info", typing=True): print(f"🧪 [{category.upper()}] {text}")
+
+    main()
