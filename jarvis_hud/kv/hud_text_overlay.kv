@@ -1,0 +1,26 @@
+<HUDTextOverlay>:
+    size_hint: None, None
+    size: 500, 60
+    pos_hint: {"center_x": 0.5, "center_y": 0.5}
+
+    canvas.before:
+        Color:
+            rgba: 0, 0, 0, 0.3
+        Rectangle:
+            size: self.size
+            pos: self.pos
+
+    ScrollView:
+        size_hint: None, None
+        size: root.width - 20, root.height - 20
+        pos: root.x + 10, root.y + 10
+
+        Label:
+            id: label
+            font_size: "20sp"
+            markup: True
+            size_hint_y: None
+            height: self.texture_size[1]
+            text_size: self.width, None
+            halign: "left"
+            valign: "top"

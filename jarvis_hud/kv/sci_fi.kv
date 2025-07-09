@@ -1,0 +1,246 @@
+<HUDInterface>:
+    id: hud_root
+
+    canvas.before:
+        Color:
+            rgba: 0.02, 0.02, 0.05, 1  # Very dark background
+        Rectangle:
+            pos: self.pos
+            size: self.size
+
+    # --- Main Layout for HUD UI ---
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 20
+        spacing: 10
+
+        # === TIME & STATUS BAR ===
+        BoxLayout:
+            orientation: 'horizontal'
+            size_hint_y: None
+            height: "50dp"
+            padding: 20
+            spacing: 20
+
+            canvas.before:
+                Color:
+                    rgba: 0.2, 0.8, 1, 0.15
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [10]
+
+                Color:
+                    rgba: 0.2, 1, 1, 0.4
+                Line:
+                    width: 1.2
+                    rounded_rectangle: (*self.pos, *self.size, 10)
+
+            BoxLayout:
+                orientation: 'horizontal'
+                size_hint_x: 0.3
+                spacing: 18
+
+                Label:
+                    id: clock_label
+                    text: "[b]--:--:-- AM[/b]"
+                    markup: True
+                    font_size: '20sp'
+                    color: 1, 0.2, 0.1, 1
+
+                Label:
+                    id: date_label
+                    text: "2025.07.07"
+                    font_size: '16sp'
+                    color: 1, 0.5, 0.3, 0.8
+
+            BoxLayout:
+                size_hint_x: 0.4
+
+                Label:
+                    text: "Lavis"
+                    font_size: '26sp'
+                    halign: 'center'
+                    valign: 'middle'
+                    text_size: self.size
+                    color: 0.2, 1, 1, 1
+
+            BoxLayout:
+                orientation: 'horizontal'
+                size_hint_x: 0.3
+                spacing: 10
+
+                Label:
+                    text: "System Status"
+                    font_size: '16sp'
+                    color: 1, 0.3, 0.3, 1
+
+                ProgressBar:
+                    max: 100
+                    value: 80
+                    size_hint_x: 0.3
+                    height: "20dp"
+                    pos_hint: {"center_y": 0.5}
+
+        BoxLayout:
+            orientation: 'horizontal'
+            spacing: 20
+
+            BoxLayout:
+                orientation: 'vertical'
+                size_hint_x: 0.3
+                spacing: 10
+
+                Label:
+                    text: "TACTICAL OVERVIEW"
+                    font_size: '18sp'
+                    color: 1, 0.4, 0.2, 1
+
+                RadarWidget:
+                    id: radar
+                    size_hint: None, None
+                    size: 220, 220
+
+                Label:
+                    text: "FRIENDLIES: 03  |  HOSTILES: 07"
+                    font_size: '14sp'
+                    color: 0.2, 1, 1, 1
+
+            BoxLayout:
+                orientation: 'vertical'
+                size_hint_x: 0.4
+                spacing: 10
+
+                canvas.before:
+                    Color:
+                        rgba: 0.1, 0.2, 0.4, 0.0
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
+
+                Label:
+                    text: "All systems operational.\nStanding by for orders."
+                    font_size: '16sp'
+                    padding: 20
+                    halign: 'center'
+                    text_size: self.size
+                    color: 0.8, 0.9, 1, 1
+
+            BoxLayout:
+                orientation: 'vertical'
+                size_hint_x: 0.3
+                spacing: 8
+
+                Label:
+                    text: "SENSOR ARRAY"
+                    font_size: '18sp'
+                    color: 1, 0.5, 0.3, 1
+
+                BoxLayout:
+                    orientation: 'vertical'
+                    spacing: 5
+                    size_hint_y: None
+                    height: 120
+
+                    Label:
+                        text: "Electromagnetic"
+                        font_size: '14sp'
+                        color: 0.2, 1, 1, 1
+                    ProgressBar:
+                        max: 100
+                        value: 90
+
+                    Label:
+                        text: "Thermal"
+                        font_size: '14sp'
+                        color: 1, 0.6, 0.3, 1
+                    ProgressBar:
+                        max: 100
+                        value: 70
+
+                    Label:
+                        text: "Gravitational"
+                        font_size: '14sp'
+                        color: 1, 0, 1, 1
+                    ProgressBar:
+                        max: 100
+                        value: 34
+
+        BoxLayout:
+            orientation: 'horizontal'
+            size_hint_y: None
+            height: "140dp"
+            spacing: 20
+
+            BoxLayout:
+                orientation: 'vertical'
+                size_hint_x: 0.5
+
+                Label:
+                    text: "POWER SYSTEMS"
+                    font_size: '18sp'
+                    color: 1, 0.4, 0.2, 1
+
+                Label:
+                    text: "TEMP: HIGH"
+                    font_size: '14sp'
+                    color: 1, 0.2, 0.2, 1
+
+                Label:
+                    text: "Reactor"
+                    font_size: '14sp'
+                    color: 0.3, 1, 0.4, 1
+                ProgressBar:
+                    max: 100
+                    value: 94
+
+                Label:
+                    text: "Shields"
+                    font_size: '14sp'
+                    color: 0.2, 0.6, 1, 1
+                ProgressBar:
+                    max: 100
+                    value: 78
+
+                Label:
+                    text: "Weapons"
+                    font_size: '14sp'
+                    color: 1, 0.3, 0.2, 1
+                ProgressBar:
+                    max: 100
+                    value: 85
+
+            BoxLayout:
+                orientation: 'vertical'
+                padding: 10
+                spacing: 5
+                size_hint_x: 0.5
+
+                canvas.before:
+                    Color:
+                        rgba: 1, 0.1, 0.1, 0.1
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
+
+                Label:
+                    text: "[b]\⚠  ALERT STATUS[/b]"
+                    markup: True
+                    font_size: '18sp'
+                    color: 1, 0.3, 0.3, 1
+
+                Label:
+                    text: "\⚠  HULL BREACH DETECTED"
+                    font_size: '14sp'
+                    color: 1, 0.2, 0.2, 1
+
+                Label:
+                    text: "\❤ LIFE SUPPORT CRITICAL"
+                    font_size: '14sp'
+                    color: 1, 0.5, 0.2, 1
+
+                Label:
+                    text: "\📡 INCOMING TRANSMISSION"
+                    font_size: '14sp'
+                    color: 0.2, 1, 1, 1
+
