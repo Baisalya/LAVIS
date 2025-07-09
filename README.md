@@ -1,6 +1,4 @@
-Sure! Below is a **fully expanded and professional `README.md`** for your LAVIS GitHub project. You can **copy-paste it directly** into a `README.md` file at the root of your repo:
 
----
 
 ```markdown
 # 🤖 LAVIS – Intelligent Voice Assistant with Futuristic HUD
