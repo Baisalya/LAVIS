@@ -81,8 +81,13 @@ def _listening_indicator():
 # === Voice input loop ===
 def _vosk_listen_loop():
     global audio_stream
-    import wave
-    from LAVIS.jarvis.voice.auth.voice_auth import is_authenticated
+    import json
+    import threading
+    import traceback
+    import pyaudio
+    from vosk import KaldiRecognizer
+    from LAVIS.jarvis.voice.auth.voice_auth import is_authenticated_from_bytes
+    from LAVIS.utils.hud_utils import get_hud_controller
 
     p = None
     try:
@@ -97,7 +102,7 @@ def _vosk_listen_loop():
         audio_stream.start_stream()
         rec = KaldiRecognizer(model, 16000)
 
-        full_audio = bytearray()  # For authentication chunk
+        full_audio = bytearray()  # 🔊 Raw PCM data buffer for auth
 
         while _listening:
             if _paused:
@@ -108,32 +113,26 @@ def _vosk_listen_loop():
             if not data:
                 continue
 
-            full_audio.extend(data)  # Accumulate audio
+            full_audio.extend(data)  # 📦 Accumulate data
 
             if rec.AcceptWaveform(data):
                 try:
                     result = json.loads(rec.Result())
                     query = result.get("text", "").strip().lower()
 
-                    # Skip if empty speech
                     if not query:
                         print("\n⛔ Ignored (empty result)")
                         rec.Reset()
                         full_audio.clear()
                         continue
 
-                    # Save full audio for authentication
-                    with wave.open("temp_input.wav", "wb") as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)
-                        wf.setframerate(16000)
-                        wf.writeframes(full_audio)
+                    # 🧠 Prepare authentication audio
+                    auth_data = bytes(full_audio)
+                    full_audio.clear()
 
-                    full_audio.clear()  # Reset for next utterance
-
-                    # Run authentication in thread
-                    def process_query(query_text):
-                        if not is_authenticated("temp_input.wav"):
+                    # 🧵 Voice auth & command handling
+                    def process_query(query_text, raw_bytes):
+                        if not is_authenticated_from_bytes(raw_bytes):
                             print("⛔ Unauthorized voice. Ignored.")
                             controller = get_hud_controller()
                             if controller:
@@ -150,8 +149,7 @@ def _vosk_listen_loop():
                         except Full:
                             print("⚠️ Command queue full. Ignoring...")
 
-                    threading.Thread(target=process_query, args=(query,)).start()
-
+                    threading.Thread(target=process_query, args=(query, auth_data)).start()
                     rec.Reset()
 
                 except Exception:
@@ -159,7 +157,7 @@ def _vosk_listen_loop():
                     traceback.print_exc()
 
             else:
-                # Show partial results for UI feedback
+                # Show partial transcription
                 partial_result = json.loads(rec.PartialResult())
                 partial = partial_result.get("partial", "").strip().lower()
                 if partial:
@@ -168,7 +166,7 @@ def _vosk_listen_loop():
                     if controller:
                         Clock.schedule_once(lambda dt: controller.type_live_text(f"🗣️ {partial}"), 0)
 
-        # Cleanup
+        # Cleanup stream
         if audio_stream:
             audio_stream.stop_stream()
             audio_stream.close()

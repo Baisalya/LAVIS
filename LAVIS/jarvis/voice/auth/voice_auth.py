@@ -40,32 +40,30 @@ def load_embedding():
     return torch.load(EMBEDDING_FILE, map_location=torch.device("cpu"))
 
 # ✅ Check if input voice matches enrolled voice
-def is_authenticated(audio_path, threshold=0.1):
-    try:
-        if not os.path.exists(audio_path):
-            print(f"❌ Audio not found: {audio_path}")
-            return False
+import io
 
+import torch
+import torchaudio
+import traceback
+
+def is_authenticated_from_bytes(pcm_bytes: bytes, threshold=0.1):
+    try:
         enrolled_embedding = load_embedding()
 
-        signal, fs = torchaudio.load(audio_path)
+        # PCM specs: 16-bit (int16), mono, 16000 Hz
+        waveform = torch.frombuffer(pcm_bytes, dtype=torch.int16).float() / 32768.0
+        waveform = waveform.unsqueeze(0)  # Add batch dimension
 
-        # Check for very short audio
-        if signal.shape[1] < fs:
-            print("⏳ Input audio too short for authentication.")
+        if waveform.shape[1] < 16000:  # Less than 1 second
+            print("⏳ Audio too short for authentication.")
             return False
 
-        test_embedding = auth_model.encode_batch(signal).squeeze(1)
-
-        # Cosine similarity
-        score = torch.nn.functional.cosine_similarity(
-            enrolled_embedding, test_embedding
-        ).item()
-
+        test_embedding = auth_model.encode_batch(waveform).squeeze(1)
+        score = torch.nn.functional.cosine_similarity(enrolled_embedding, test_embedding).item()
         print(f"🔐 Voice match score: {score:.4f}")
         return score >= threshold
 
     except Exception:
-        print("🚨 Error during authentication:")
+        print("🚨 Error during in-memory authentication:")
         traceback.print_exc()
         return False
