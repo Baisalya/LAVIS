@@ -1,4 +1,4 @@
-# intent_detector.py (GPT-4 refined version)
+# intent_detector.py 
 
 def detect_intent(text):
     text = text.lower().strip()
@@ -37,4 +37,10 @@ def detect_intent(text):
     ]):
         return "learning"
 
+
+    if any(kw in text for kw in [
+        
+         "scan bluetooth", "scan network", "connect network", "connect to", "bluetooth", "wifi", "wi-fi"
+    ]):
+        return "network"
     return "unknown"

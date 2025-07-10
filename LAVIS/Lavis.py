@@ -23,7 +23,7 @@ from LAVIS.jarvis.commands.apps import get_start_menu_apps
 WAKE_WORD = "jarvis"
 WAKE_UP_PHRASE = "jarvis wake up"
 SLEEP_PHRASE = "jarvis sleep"
-AUDIO_STARTUP = "lavis start.mp3"
+AUDIO_STARTUP = r"\LAVIS\lavis start.mp3"
 
 session_state = "sleep"
 
@@ -125,21 +125,29 @@ def main():
                     show_hud_reply("Responding to conversation...")
                     # You can integrate chatbot reply here if needed
                     continue
+                  
+                # elif handle_fallback(command):
+                #     from LAVIS.jarvis.web.fallback import last_fallback_response
+                #     show_fallback_in_hud(last_fallback_response)
+                #     show_hud_reply("Conversation done.")
+                #     session_state = "normal"
+                #     continue
 
-                elif handle_fallback(command):
-                    from jarvis.web.fallback import last_fallback_response
-                    show_fallback_in_hud(last_fallback_response)
-                    show_hud_reply("Conversation done.")
-                    session_state = "normal"
-                    continue
-
+                # else:
+                #     show_hud_reply("Fallback handler responding...")
+                #     if handle_fallback(command):
+                #         from LAVIS.jarvis.web.fallback  import last_fallback_response
+                #         show_fallback_in_hud(last_fallback_response)
+                #         session_state = "normal"
+                #         continue
                 else:
-                    show_hud_reply("Fallback handler responding...")
-                    if handle_fallback(command):
-                        from jarvis.web.fallback import last_fallback_response
-                        show_fallback_in_hud(last_fallback_response)
-                        session_state = "normal"
-                        continue
+                  # Fallback handler manages everything including follow-ups
+                   show_hud_reply("Trying to find an answer...")
+                if handle_fallback(command):
+                    session_state = "normal"
+                else:
+                    show_hud_reply("Sorry, I couldn't find a response.")
+                    continue
 
             else:
                 time.sleep(0.1)

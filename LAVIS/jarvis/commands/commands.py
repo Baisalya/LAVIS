@@ -5,6 +5,8 @@ from LAVIS.jarvis.web.fallback import handle_fallback
 from LAVIS.jarvis.commands.apps import open_windows_app
 from LAVIS.jarvis.commands.explorer import handle_explorer
 from LAVIS.jarvis.commands.input_control import handle_input_control
+from LAVIS.jarvis.commands.network_bluetooth import handle_network_bluetooth
+
 
 def handle_command(command: str) -> bool:
     command = command.lower().strip()
@@ -21,6 +23,7 @@ def handle_command(command: str) -> bool:
         handle_explorer,
         handle_system,
         handle_browser,
+        handle_network_bluetooth,  # inside the for-loop of handlers
         handle_fallback
     ]:
         try:
