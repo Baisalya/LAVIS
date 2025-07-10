@@ -7,7 +7,7 @@ from kivy.clock import Clock
 class HUDController:
     def __init__(self, hud_widget):
         self.hud = hud_widget  # HUDInterface
-        self.overlay = self.hud.text_overlay  # ✅ Reference to HUDTextOverlay
+        self.overlay = getattr(self.hud, 'text_overlay', None)  # ✅ Reference to HUDTextOverlay
         self._last_text = ""
         self._last_time = 0
         self._typing_lock = Lock()
