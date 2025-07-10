@@ -7,6 +7,8 @@ from queue import Queue, Full
 import pyaudio
 from vosk import Model, KaldiRecognizer
 import os
+import os
+os.environ["VOSK_LOG_LEVEL"] = "0"
 
 from kivy.clock import Clock
 from jarvis_hud.main import hud_interface
@@ -79,6 +81,9 @@ def _listening_indicator():
 # === Voice input loop ===
 def _vosk_listen_loop():
     global audio_stream
+    import wave
+    from LAVIS.jarvis.voice.auth.voice_auth import is_authenticated
+
     p = None
     try:
         p = pyaudio.PyAudio()
@@ -92,6 +97,8 @@ def _vosk_listen_loop():
         audio_stream.start_stream()
         rec = KaldiRecognizer(model, 16000)
 
+        full_audio = bytearray()  # For authentication chunk
+
         while _listening:
             if _paused:
                 time.sleep(0.1)
@@ -101,42 +108,67 @@ def _vosk_listen_loop():
             if not data:
                 continue
 
+            full_audio.extend(data)  # Accumulate audio
+
             if rec.AcceptWaveform(data):
                 try:
                     result = json.loads(rec.Result())
                     query = result.get("text", "").strip().lower()
 
-                    if query:
-                        print(f"\n🎧 You said: {query}")
+                    # Skip if empty speech
+                    if not query:
+                        print("\n⛔ Ignored (empty result)")
+                        rec.Reset()
+                        full_audio.clear()
+                        continue
+
+                    # Save full audio for authentication
+                    with wave.open("temp_input.wav", "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(16000)
+                        wf.writeframes(full_audio)
+
+                    full_audio.clear()  # Reset for next utterance
+
+                    # Run authentication in thread
+                    def process_query(query_text):
+                        if not is_authenticated("temp_input.wav"):
+                            print("⛔ Unauthorized voice. Ignored.")
+                            controller = get_hud_controller()
+                            if controller:
+                                Clock.schedule_once(lambda dt: controller.type_live_text("⛔ Unauthorized voice 🎙️"), 0)
+                            return
+
+                        print(f"\n🎧 You said: {query_text}")
                         controller = get_hud_controller()
                         if controller:
-                            Clock.schedule_once(lambda dt, text=query: controller.update(text, category="command", typing=True))
-
-                        if query in ["read it", "read the answer", "tell me", "repeat"]:
-                            print("🎯 Trigger phrase detected for reading fallback.")
+                            Clock.schedule_once(lambda dt: controller.update(query_text, category="command", typing=True))
 
                         try:
-                            command_queue.put(query, block=False)
+                            command_queue.put(query_text, block=False)
                         except Full:
                             print("⚠️ Command queue full. Ignoring...")
 
-                    else:
-                        print("\n⛔ Ignored (empty result)")
+                    threading.Thread(target=process_query, args=(query,)).start()
 
                     rec.Reset()
 
                 except Exception:
                     print("\n⚠️ Error processing speech")
                     traceback.print_exc()
+
             else:
+                # Show partial results for UI feedback
                 partial_result = json.loads(rec.PartialResult())
                 partial = partial_result.get("partial", "").strip().lower()
                 if partial:
                     print(f"\r🔎 Partial: {partial}", end='', flush=True)
                     controller = get_hud_controller()
                     if controller:
-                        Clock.schedule_once(lambda dt, text=partial: controller.type_live_text(f"🗣️ {text}"), 0)
+                        Clock.schedule_once(lambda dt: controller.type_live_text(f"🗣️ {partial}"), 0)
 
+        # Cleanup
         if audio_stream:
             audio_stream.stop_stream()
             audio_stream.close()
