@@ -5,7 +5,7 @@ from datetime import datetime
 from kivy.uix.floatlayout import FloatLayout
 from kivy.lang import Builder
 from kivy.clock import Clock
-
+from kivy.properties import StringProperty
 # Custom Widgets
 from .radar import RadarWidget
 from .grid_overlay import GridOverlay
@@ -21,6 +21,7 @@ Builder.load_file("jarvis_hud/kv/sci_fi.kv")
 
 
 class HUDInterface(FloatLayout):
+    system_status = StringProperty("sleep")  # ✅ Must be at class level
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -59,7 +60,9 @@ class HUDInterface(FloatLayout):
 
         # Optional: Real-time clock
         Clock.schedule_interval(self.update_time, 1)
-
+        #system status
+    def update_status(self, new_status):
+        self.system_status = new_status
     def update_text(self, message: str, category="info", typing=True):
         """Public method used by global update_hud_text()."""
         if self.hud_controller:

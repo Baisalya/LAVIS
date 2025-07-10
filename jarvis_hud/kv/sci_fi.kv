@@ -43,14 +43,14 @@
 
                 Label:
                     id: clock_label
-                    text: "[b]--:--:-- AM[/b]"
+                    text: ""
                     markup: True
                     font_size: '20sp'
                     color: 1, 0.2, 0.1, 1
 
                 Label:
                     id: date_label
-                    text: "2025.07.07"
+                    text: ""
                     font_size: '16sp'
                     color: 1, 0.5, 0.3, 0.8
 
@@ -75,9 +75,11 @@
                     font_size: '16sp'
                     color: 1, 0.3, 0.3, 1
 
-                ProgressBar:
-                    max: 100
-                    value: 80
+                Label:
+                    id: system_status_label
+                    text: root.system_status
+                    font_size: '16sp'
+                    color: 0.3, 1, 0.3, 1
                     size_hint_x: 0.3
                     height: "20dp"
                     pos_hint: {"center_y": 0.5}

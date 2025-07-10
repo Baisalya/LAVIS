@@ -1,15 +1,22 @@
 # === jarvis_hud/main.py ==
 from kivy.app import App
 from .widgets.sci_fi_hud import HUDInterface
+from kivy.lang import Builder
 
 hud_interface = None
-
 class SciFiApp(App):
     def build(self):
         self.title = "LAVIS"
+        Builder.load_file("jarvis_hud/kv/sci_fi.kv")    
+
         global hud_interface
         hud_interface = HUDInterface()
         return hud_interface
+    
+def update_hud_status(new_status: str):
+    if hud_interface:
+        hud_interface.update_status(new_status)
+
 
 def update_hud_text(message: str, category="info", typing=True):
     if hud_interface:

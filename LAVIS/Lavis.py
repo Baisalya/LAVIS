@@ -26,6 +26,8 @@ SLEEP_PHRASE = "jarvis sleep"
 AUDIO_STARTUP = r"\LAVIS\lavis start.mp3"
 
 session_state = "sleep"
+from jarvis_hud.main import update_hud_status
+update_hud_status("sleep")
 
 def hud_speak(message: str):
     show_hud_reply("...", typing=True)
@@ -47,6 +49,7 @@ def check_wake_phrase(text):
     text = text.lower()
     if WAKE_UP_PHRASE in text:
         session_state = "normal"
+        update_hud_status("Online")  # ✅ update the HUD label
         hud_speak("Systems operational. Awaiting your instructions.")
         return True
     elif SLEEP_PHRASE in text:
@@ -114,6 +117,7 @@ def main():
                     session_state = "learning"
                     show_hud_reply("Entering learning mode...")
                     learning_mode(command)
+                    update_hud_status("Learing")  # ✅ update the HUD label
                     show_hud_reply("Exiting learning mode.")
                     session_state = "normal"
 
@@ -122,6 +126,7 @@ def main():
                         show_hud_reply("I didn't catch a full sentence. Please repeat.")
                         continue
                     session_state = "conversation"
+                    update_hud_status("normal")  # ✅ update the HUD label
                     show_hud_reply("Responding to conversation...")
                     # You can integrate chatbot reply here if needed
                     continue
