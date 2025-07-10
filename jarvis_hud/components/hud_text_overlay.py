@@ -17,7 +17,7 @@ class HUDTextOverlay(FloatLayout):
         self.max_width = 800
         self.default_height = 100
         self.max_height = 300
-        self.width = min(624, self.max_width)  # e.g. 600 * 1.04
+        self.width = min(624, self.max_width)
 
         self.size_hint = (None, None)
         self.height = self.default_height
@@ -95,3 +95,23 @@ class HUDTextOverlay(FloatLayout):
 
         self.scroll.pos = (self.x + 10, self.y + 10)
         self.scroll.size = (self.width - 20, self.height - 20)
+
+
+# ✅ Updated HUDInterface wrapper to expose `text_overlay`
+from kivy.uix.boxlayout import BoxLayout
+
+class HUDInterface(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = "vertical"
+        self.text_overlay = HUDTextOverlay()
+        self.add_widget(self.text_overlay)
+
+    def update_text(self, message, category="info", typing=False):
+        from .hud_controller import HUDController
+        controller = HUDController(self)
+        controller.update(message, category, typing)
+
+    def update_status(self, new_status):
+        # You can enhance this if you have a dedicated status area
+        self.text_overlay.highlight_temp_text(f"[STATUS] {new_status}")

@@ -56,7 +56,7 @@ class HUDInterface(FloatLayout):
         self.text_overlay = HUDTextOverlay()
         self.add_widget(self.text_overlay)
 
-        self.hud_controller = HUDController(self.text_overlay)
+        self.hud_controller = HUDController(self)
 
         # Optional: Real-time clock
         Clock.schedule_interval(self.update_time, 1)

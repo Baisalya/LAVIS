@@ -19,6 +19,7 @@ from LAVIS.jarvis.web.fallback import handle_fallback
 from jarvis_hud.main import update_hud_text
 from LAVIS.hud_display import show_fallback_in_hud, show_hud_reply, show_hud_command
 from LAVIS.jarvis.commands.apps import get_start_menu_apps
+from jarvis_hud.main import update_hud_status
 
 WAKE_WORD = "jarvis"
 WAKE_UP_PHRASE = "jarvis wake up"
@@ -26,7 +27,6 @@ SLEEP_PHRASE = "jarvis sleep"
 AUDIO_STARTUP = r"\LAVIS\lavis start.mp3"
 
 session_state = "sleep"
-from jarvis_hud.main import update_hud_status
 update_hud_status("sleep")
 
 def hud_speak(message: str):
@@ -49,7 +49,7 @@ def check_wake_phrase(text):
     text = text.lower()
     if WAKE_UP_PHRASE in text:
         session_state = "normal"
-        update_hud_status("Online")  # ✅ update the HUD label
+        update_hud_status("Online")
         hud_speak("Systems operational. Awaiting your instructions.")
         return True
     elif SLEEP_PHRASE in text:
@@ -57,6 +57,7 @@ def check_wake_phrase(text):
         hud_speak("Okay sir, I’m going to sleep.")
         return True
     return False
+
 def main():
     global session_state
 
@@ -68,12 +69,18 @@ def main():
         welcome()
         start_background_listening()
 
+        from jarvis_hud.main import hud_interface
+        from jarvis_hud.components.hud_controller import HUDController
+        hud_controller = HUDController(hud_interface)
+
+        partial_input = ""
+
         while True:
             if not command_queue.empty():
                 input_text = command_queue.get()
 
-                # ✅ Instantly show what was said in the HUD
-                show_hud_command(input_text, typing=True)
+                # ✅ Live typing during speech
+                hud_controller.type_live_text(input_text)
                 time.sleep(0.1)
 
                 print("🎤 Heard:", input_text)
@@ -89,6 +96,10 @@ def main():
                     command = input_text
 
                 print("📝 Command:", command)
+
+                # ✅ Final colored command shown after typing
+                hud_controller.update(command, category="command", typing=True)
+
                 intent = detect_intent(command)
 
                 if intent == "command":
@@ -117,7 +128,7 @@ def main():
                     session_state = "learning"
                     show_hud_reply("Entering learning mode...")
                     learning_mode(command)
-                    update_hud_status("Learing")  # ✅ update the HUD label
+                    update_hud_status("Learing")
                     show_hud_reply("Exiting learning mode.")
                     session_state = "normal"
 
@@ -126,28 +137,12 @@ def main():
                         show_hud_reply("I didn't catch a full sentence. Please repeat.")
                         continue
                     session_state = "conversation"
-                    update_hud_status("normal")  # ✅ update the HUD label
+                    update_hud_status("normal")
                     show_hud_reply("Responding to conversation...")
-                    # You can integrate chatbot reply here if needed
                     continue
-                  
-                # elif handle_fallback(command):
-                #     from LAVIS.jarvis.web.fallback import last_fallback_response
-                #     show_fallback_in_hud(last_fallback_response)
-                #     show_hud_reply("Conversation done.")
-                #     session_state = "normal"
-                #     continue
 
-                # else:
-                #     show_hud_reply("Fallback handler responding...")
-                #     if handle_fallback(command):
-                #         from LAVIS.jarvis.web.fallback  import last_fallback_response
-                #         show_fallback_in_hud(last_fallback_response)
-                #         session_state = "normal"
-                #         continue
                 else:
-                  # Fallback handler manages everything including follow-ups
-                   show_hud_reply("Trying to find an answer...")
+                    show_hud_reply("Trying to find an answer...")
                 if handle_fallback(command):
                     session_state = "normal"
                 else:
@@ -165,10 +160,10 @@ def main():
         logging.exception("❌ Error in main loop:")
         update_hud_text(str(e), category="error")
         speak("Something went wrong.")
+
 if __name__ == "__main__":
     print("🧪 Running Lavis in console-only mode (no HUD)")
 
-    # === HUD function overrides for console testing ===
     def show_hud_command(text, typing=True): print(f"🧪 [COMMAND] {text}")
     def show_hud_reply(text, typing=True): print(f"🧪 [REPLY] {text}")
     def show_fallback_in_hud(text): print(f"🧪 [FALLBACK] {text}")
