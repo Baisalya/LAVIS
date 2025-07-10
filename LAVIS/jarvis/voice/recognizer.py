@@ -6,6 +6,12 @@ import json
 import pyaudio
 from vosk import Model, KaldiRecognizer
 
+import os
+from kivy.clock import Clock
+from jarvis_hud.main import hud_interface
+from jarvis_hud.components.hud_controller import HUDController
+from LAVIS.utils.hud_utils import get_hud_controller
+
 # === Global variables ===
 recognizer = None
 microphone = None
@@ -19,7 +25,6 @@ _indicator_thread = None
 audio_stream = None
 
 # === Load Vosk model ===
-import os
 model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "vosk-model-en-in-0.5", "vosk-model-en-in-0.5"))
 model = Model(model_path)
 vosk_recognizer = KaldiRecognizer(model, 16000)
@@ -29,17 +34,27 @@ def set_session_mode(active: bool):
     global _in_session
     _in_session = active
     print("🧠 Session mode:", "ON" if active else "OFF")
+    status = "💬 Session Chatting..." if active else "🟢 Listening"
+    controller = get_hud_controller()
+    if controller:
+        Clock.schedule_once(lambda dt, text=f"{status} 🎙️": controller.type_live_text(text))
 
 # === Pause/resume listening ===
 def pause_listening():
     global _paused
     _paused = True
     print("⏸️ Listening paused.")
+    controller = get_hud_controller()
+    if controller:
+        Clock.schedule_once(lambda dt, text="⏸️ Listening paused 🎙️": controller.type_live_text(text))
 
 def resume_listening():
     global _paused
     _paused = False
     print("▶️ Listening resumed.")
+    controller = get_hud_controller()
+    if controller:
+        Clock.schedule_once(lambda dt, text="🟢 Listening resumed 🎙️": controller.type_live_text(text))
 
 # === Listening indicator ===
 def _listening_indicator():
@@ -53,7 +68,9 @@ def _listening_indicator():
         else:
             status = f"🟢 Listening {animation[idx % len(animation)]}"
 
-        print(f"\r{status} 🎙️", end='', flush=True)
+        controller = get_hud_controller()
+        if controller:
+            Clock.schedule_once(lambda dt, text=f"{status} 🎙️": controller.type_live_text(text))
         idx += 1
         time.sleep(0.2)
     print("\r🔴 Stopped background listening.       ")
@@ -70,7 +87,6 @@ def _vosk_listen_loop():
                               frames_per_buffer=8000)
         audio_stream.start_stream()
 
-        # Create recognizer per session
         rec = KaldiRecognizer(model, 16000)
 
         while _listening:
@@ -87,6 +103,9 @@ def _vosk_listen_loop():
 
                     if query:
                         print(f"\n🎧 You said: {query}")
+                        controller = get_hud_controller()
+                        if controller:
+                            controller.update(query, category="command", typing=True)
 
                         if query in ["read it", "read the answer", "tell me", "repeat"]:
                             print("🎯 Trigger phrase detected for reading fallback.")
@@ -95,7 +114,6 @@ def _vosk_listen_loop():
                     else:
                         print("\n⛔ Ignored (empty result)")
 
-                    # 🔄 Reinitialize recognizer for the next utterance
                     rec = KaldiRecognizer(model, 16000)
 
                 except Exception:
@@ -107,6 +125,9 @@ def _vosk_listen_loop():
                 partial = partial_result.get("partial", "").strip().lower()
                 if partial:
                     print(f"\r🔎 Partial: {partial}", end='', flush=True)
+                    controller = get_hud_controller()
+                    if controller:
+                        Clock.schedule_once(lambda dt, text=f"🗣️ {partial}": controller.type_live_text(text))
 
     except Exception:
         print("\n🚫 Mic or audio stream error:")

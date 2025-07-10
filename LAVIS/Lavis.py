@@ -20,6 +20,7 @@ from jarvis_hud.main import update_hud_text
 from LAVIS.hud_display import show_fallback_in_hud, show_hud_reply, show_hud_command
 from LAVIS.jarvis.commands.apps import get_start_menu_apps
 from jarvis_hud.main import update_hud_status
+from LAVIS.utils.hud_utils import get_hud_controller
 
 WAKE_WORD = "jarvis"
 WAKE_UP_PHRASE = "jarvis wake up"
@@ -143,11 +144,22 @@ def main():
 
                 else:
                     show_hud_reply("Trying to find an answer...")
-                if handle_fallback(command):
-                    session_state = "normal"
-                else:
-                    show_hud_reply("Sorry, I couldn't find a response.")
-                    continue
+                    def run_fallback():
+                        response = handle_fallback(command)
+                        controller = get_hud_controller()
+                        global session_state
+                        if response:
+                           session_state = "normal"
+                        if controller:
+                            controller.update(response, category="reply", typing=True)
+                        else:
+                            if controller:       
+                               controller.update("Sorry, I couldn't find a response.", category="reply", typing=True)
+
+                threading.Thread(target=run_fallback, daemon=True).start()
+                            
+                continue
+
 
             else:
                 time.sleep(0.1)
