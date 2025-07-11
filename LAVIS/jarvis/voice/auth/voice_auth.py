@@ -46,17 +46,19 @@ import torch
 import torchaudio
 import traceback
 
-def is_authenticated_from_bytes(pcm_bytes: bytes, threshold=0.1):
+def is_authenticated_from_bytes(pcm_bytes: bytes, threshold=0.01):
     try:
         enrolled_embedding = load_embedding()
 
-        # PCM specs: 16-bit (int16), mono, 16000 Hz
         waveform = torch.frombuffer(pcm_bytes, dtype=torch.int16).float() / 32768.0
-        waveform = waveform.unsqueeze(0)  # Add batch dimension
+        waveform = waveform.unsqueeze(0)
 
-        if waveform.shape[1] < 16000:  # Less than 1 second
+        # Truncate or pad to 1 sec (16000 samples)
+        if waveform.shape[1] < 16000:
             print("⏳ Audio too short for authentication.")
             return False
+        elif waveform.shape[1] > 16000:
+            waveform = waveform[:, :16000]
 
         test_embedding = auth_model.encode_batch(waveform).squeeze(1)
         score = torch.nn.functional.cosine_similarity(enrolled_embedding, test_embedding).item()

@@ -16,7 +16,7 @@ voice_name = "en-US-AriaNeural"
 engine = pyttsx3.init()
 engine.setProperty('rate', 160)
 engine.setProperty('volume', 1.0)
-engine.setProperty('voice', engine.getProperty('voices')[0].id)
+engine.setProperty('voice', engine.getProperty('voices')[1].id)
 
 
 def speak_offline(text):

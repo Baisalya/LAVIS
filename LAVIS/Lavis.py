@@ -1,4 +1,5 @@
 # lavis.py
+
 import os
 import re
 import time
@@ -20,6 +21,8 @@ from jarvis_hud.main import update_hud_text, update_hud_status, hud_interface
 from LAVIS.hud_display import show_fallback_in_hud, show_hud_reply, show_hud_command
 from jarvis_hud.components.hud_controller import HUDController
 from LAVIS.utils.hud_utils import get_hud_controller
+import os
+os.environ["TORIO_DISABLE_EXTENSION"] = "1"
 
 WAKE_WORD = "jarvis"
 WAKE_UP_PHRASE = "jarvis wake up"

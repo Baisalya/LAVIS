@@ -1,3 +1,4 @@
+#recognizr.py
 import traceback
 import threading
 import time
@@ -7,14 +8,13 @@ from queue import Queue, Full
 import pyaudio
 from vosk import Model, KaldiRecognizer
 import os
-import os
 os.environ["VOSK_LOG_LEVEL"] = "0"
 
 from kivy.clock import Clock
 from jarvis_hud.main import hud_interface
 from jarvis_hud.components.hud_controller import HUDController
 from LAVIS.utils.hud_utils import get_hud_controller
-
+from LAVIS.jarvis.voice.auth.voice_auth import is_authenticated_from_bytes
 # === Global variables ===
 recognizer = None
 stop_listening = None
@@ -78,18 +78,20 @@ def _listening_indicator():
         time.sleep(0.2)
     print("\r🔴 Stopped background listening.")
 
-# === Voice input loop ===
+# === Voice input loop (no authentication) ===
 def _vosk_listen_loop():
     global audio_stream
     import json
+    import io
     import threading
     import traceback
     import pyaudio
-    from vosk import KaldiRecognizer
-    from LAVIS.jarvis.voice.auth.voice_auth import is_authenticated_from_bytes
     from LAVIS.utils.hud_utils import get_hud_controller
 
     p = None
+    _last_partial = ""
+    pcm_buffer = bytearray()  # 🔐 Authentication buffer
+
     try:
         p = pyaudio.PyAudio()
         audio_stream = p.open(
@@ -102,8 +104,6 @@ def _vosk_listen_loop():
         audio_stream.start_stream()
         rec = KaldiRecognizer(model, 16000)
 
-        full_audio = bytearray()  # 🔊 Raw PCM data buffer for auth
-
         while _listening:
             if _paused:
                 time.sleep(0.1)
@@ -113,7 +113,7 @@ def _vosk_listen_loop():
             if not data:
                 continue
 
-            full_audio.extend(data)  # 📦 Accumulate data
+            pcm_buffer.extend(data)  # 🔐 Add to buffer
 
             if rec.AcceptWaveform(data):
                 try:
@@ -122,51 +122,50 @@ def _vosk_listen_loop():
 
                     if not query:
                         print("\n⛔ Ignored (empty result)")
+                        _last_partial = ""
+                        pcm_buffer.clear()
                         rec.Reset()
-                        full_audio.clear()
                         continue
 
-                    # 🧠 Prepare authentication audio
-                    auth_data = bytes(full_audio)
-                    full_audio.clear()
-
-                    # 🧵 Voice auth & command handling
-                    def process_query(query_text, raw_bytes):
-                        if not is_authenticated_from_bytes(raw_bytes):
-                            print("⛔ Unauthorized voice. Ignored.")
-                            controller = get_hud_controller()
-                            if controller:
-                                Clock.schedule_once(lambda dt: controller.type_live_text("⛔ Unauthorized voice 🎙️"), 0)
-                            return
-
-                        print(f"\n🎧 You said: {query_text}")
+                    # 🔐 Authenticate speaker voice
+                    print(f"🔐 Authenticating voice...")
+                    if is_authenticated_from_bytes(bytes(pcm_buffer)):
+                        print(f"\n✅ Authenticated: {query}")
                         controller = get_hud_controller()
                         if controller:
-                            Clock.schedule_once(lambda dt: controller.update(query_text, category="command", typing=True))
+                            Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
 
                         try:
-                            command_queue.put(query_text, block=False)
+                            command_queue.put(query, block=False)
                         except Full:
                             print("⚠️ Command queue full. Ignoring...")
+                    else:
+                        
+                        print(f"\n❌ Authentication failed. Ignored: {query}")
+                        controller = get_hud_controller()
+                        if controller:
+                            Clock.schedule_once(lambda dt: controller.type_live_text("❌ Unauthorized voice"), 0)
 
-                    threading.Thread(target=process_query, args=(query, auth_data)).start()
+                    pcm_buffer.clear()
+                    _last_partial = ""
                     rec.Reset()
 
                 except Exception:
                     print("\n⚠️ Error processing speech")
                     traceback.print_exc()
+                    pcm_buffer.clear()
 
             else:
-                # Show partial transcription
+                # === Partial feedback ===
                 partial_result = json.loads(rec.PartialResult())
                 partial = partial_result.get("partial", "").strip().lower()
-                if partial:
+                if partial and partial != _last_partial:
+                    _last_partial = partial
                     print(f"\r🔎 Partial: {partial}", end='', flush=True)
                     controller = get_hud_controller()
                     if controller:
                         Clock.schedule_once(lambda dt: controller.type_live_text(f"🗣️ {partial}"), 0)
 
-        # Cleanup stream
         if audio_stream:
             audio_stream.stop_stream()
             audio_stream.close()
