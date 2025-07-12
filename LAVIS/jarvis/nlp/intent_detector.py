@@ -7,7 +7,7 @@ def detect_intent(raw_text: str) -> str:
     Takes a raw voice-to-text string, corrects it, and returns an intent category.
     """
 
-    # === Step 1: Correct text (T5 + fuzzy + learn) ===
+    # === Step 1: Correct text (T5 + fuzzy + learn) ==
     text = correct_command(raw_text).lower().strip()
 
     # === Step 2: Intent classification ===

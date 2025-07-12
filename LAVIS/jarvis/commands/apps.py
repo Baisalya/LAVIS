@@ -4,7 +4,7 @@ import win32com.client
 import re
 from fuzzywuzzy import fuzz
 
-_app_cache = None  # Cache to avoid reloading every time
+_app_cache = None  # Cache to avoid reloading every tim
 
 
 def get_start_menu_apps(force_reload=False):

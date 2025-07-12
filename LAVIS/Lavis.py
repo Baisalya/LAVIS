@@ -235,3 +235,4 @@ if __name__ == "__main__":
     def update_hud_text(text, category="info", typing=True): print(f"\U0001f9ea [{category.upper()}] {text}")
 
     main()
+#
