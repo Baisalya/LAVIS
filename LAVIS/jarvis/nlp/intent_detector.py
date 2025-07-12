@@ -1,7 +1,16 @@
-# intent_detector.py 
+# intent_detector.py
 
-def detect_intent(text):
-    text = text.lower().strip()
+from LAVIS.jarvis.nlp.fallback_corrector import correct_command
+
+def detect_intent(raw_text: str) -> str:
+    """
+    Takes a raw voice-to-text string, corrects it, and returns an intent category.
+    """
+
+    # === Step 1: Correct text (T5 + fuzzy + learn) ===
+    text = correct_command(raw_text).lower().strip()
+
+    # === Step 2: Intent classification ===
 
     # Conversation-like input
     if any(kw in text for kw in [
@@ -31,16 +40,17 @@ def detect_intent(text):
     ]):
         return "command"
 
-    # Custom learning mode
+    # Learning or training instructions
     if any(kw in text for kw in [
         "remember this", "learn this", "save this", "teach you"
     ]):
         return "learning"
 
-
+    # Network-related commands
     if any(kw in text for kw in [
-        
-         "scan bluetooth", "scan network", "connect network", "connect to", "bluetooth", "wifi", "wi-fi"
+        "scan bluetooth", "scan network", "connect network", "connect to",
+        "bluetooth", "wifi", "wi-fi"
     ]):
         return "network"
+
     return "unknown"

@@ -1,12 +1,12 @@
-# lavis.py
+# Lavis.py (Final Full Version with Fixed Module Import)
 
 import os
 import re
 import time
 import logging
+import threading
 from playsound import playsound
 from fuzzywuzzy import fuzz
-import threading
 
 from LAVIS.jarvis.voice.speaker import speak
 from LAVIS.jarvis.commands.commands import handle_command
@@ -21,21 +21,21 @@ from jarvis_hud.main import update_hud_text, update_hud_status, hud_interface
 from LAVIS.hud_display import show_fallback_in_hud, show_hud_reply, show_hud_command
 from jarvis_hud.components.hud_controller import HUDController
 from LAVIS.utils.hud_utils import get_hud_controller
-import os
-os.environ["TORIO_DISABLE_EXTENSION"] = "1"
+
+# ✅ FIX: Update these two lines
+from LAVIS.jarvis.commands.explorer import handle_explorer
+from LAVIS.jarvis.commands.input_control import handle_input_control
 
 WAKE_WORD = "jarvis"
 WAKE_UP_PHRASE = "jarvis wake up"
 SLEEP_PHRASE = "jarvis sleep"
 AUDIO_STARTUP = r"\LAVIS\lavis start.mp3"
 
-
-
 class LavisCore:
     def __init__(self):
         self.session_state = "sleep"
+        self.control_mode = "normal"
 
-        # ✅ Choose HUD controller based on HUD availability
         if hud_interface:
             from jarvis_hud.components.hud_controller import HUDController
             self.hud_controller = HUDController(hud_interface)
@@ -54,7 +54,7 @@ class LavisCore:
     def welcome(self):
         if os.path.exists(AUDIO_STARTUP):
             playsound(AUDIO_STARTUP)
-        self.hud_speak("Presence confirmed. Let’s make things happen when you're ready.")
+        self.hud_speak("Presence confirmed. Let's make things happen when you're ready.")
 
     def check_wake_phrase(self, text):
         text = text.lower()
@@ -65,7 +65,7 @@ class LavisCore:
             return True
         elif SLEEP_PHRASE in text:
             self.session_state = "sleep"
-            self.hud_speak("Okay sir, I’m going to sleep.")
+            self.hud_speak("Okay sir, I'm going to sleep.")
             return True
         return False
 
@@ -82,6 +82,55 @@ class LavisCore:
 
         command = re.sub(rf"\b{WAKE_WORD}\b", "", input_text, flags=re.IGNORECASE).strip() or input_text
         self.hud_controller.update(command, category="command", typing=True)
+
+        command_lower = command.lower().strip()
+
+        if "activate master control" in command_lower:
+            self.control_mode = "master_control"
+            self.hud_speak("Master control activated. You can now control screen and apps only.")
+            update_hud_status("Master Control")
+            return
+
+        elif "deactivate master control" in command_lower:
+            self.control_mode = "normal"
+            self.hud_speak("Master control deactivated. Full assistant is back online.")
+            update_hud_status("Online")
+            return
+
+        elif "activate restricted mode" in command_lower:
+            self.control_mode = "restricted"
+            self.hud_speak("Restricted mode activated. Only apps and file explorer are allowed.")
+            update_hud_status("Restricted")
+            return
+
+        elif "deactivate restricted mode" in command_lower:
+            self.control_mode = "normal"
+            self.hud_speak("Restricted mode deactivated.")
+            update_hud_status("Online")
+            return
+
+        if self.control_mode == "master_control":
+            from LAVIS.jarvis.master_controll.command_handler import handle_voice_command
+            if handle_voice_command(command):
+                return
+            if handle_explorer(command):
+                show_hud_reply("Handled file explorer command.")
+                return
+            self.hud_speak("Command not allowed in master control mode.")
+            return
+
+        if self.control_mode == "restricted":
+            if command.startswith("open "):
+                app_name = self.extract_app_name(command)
+                if app_name and open_windows_app(app_name):
+                    show_hud_reply(f"Opening {app_name}")
+                    return
+            elif handle_explorer(command):
+                show_hud_reply("Handled file explorer command.")
+                return
+            self.hud_speak("Command not allowed in restricted mode.")
+            return
+
         intent = detect_intent(command)
 
         if intent == "command":
@@ -94,13 +143,9 @@ class LavisCore:
                 return
             self.hud_speak(f"Sorry sir, I couldn't process the command: {command}")
 
-        elif intent == "explorer":
-            from jarvis.commands.explorer import handle_explorer
-            if handle_explorer(command):
-                show_hud_reply("Handled file explorer command.")
+      
 
         elif intent == "input_control":
-            from jarvis.commands.input_control import handle_input_control
             if handle_input_control(command):
                 show_hud_reply("Handled input control.")
 
@@ -129,7 +174,6 @@ class LavisCore:
                     self.session_state = "normal"
                 self.hud_controller.update(response or "Sorry, I couldn't find a response.", category="reply", typing=True)
 
-            import threading
             threading.Thread(target=run_fallback, daemon=True).start()
 
 class LavisRunner:
@@ -149,7 +193,7 @@ class LavisRunner:
                 if not command_queue.empty():
                     input_text = command_queue.get()
                     self.core.hud_controller.type_live_text(input_text)
-                    print("🎤 Heard:", input_text)
+                    print("\U0001f3a4 Heard:", input_text)
                     self.core.handle_input(input_text)
                 else:
                     time.sleep(0.1)
@@ -159,7 +203,7 @@ class LavisRunner:
             self.core.hud_speak("Jarvis shutting down.")
 
         except Exception as e:
-            logging.exception("❌ Error in main loop:")
+            logging.exception("\u274c Error in main loop:")
             update_hud_text(str(e), category="error")
             speak("Something went wrong.")
 
@@ -168,12 +212,11 @@ def main():
     LavisRunner().run()
 
 if __name__ == "__main__":
-    print("🧪 Running Lavis in console-only mode (no HUD)")
+    print("\U0001f9ea Running Lavis in console-only mode (no HUD)")
 
-    def show_hud_command(text, typing=True): print(f"🧪 [COMMAND] {text}")
-    def show_hud_reply(text, typing=True): print(f"🧪 [REPLY] {text}")
-    def show_fallback_in_hud(text): print(f"🧪 [FALLBACK] {text}")
-    def update_hud_text(text, category="info", typing=True): print(f"🧪 [{category.upper()}] {text}")
+    def show_hud_command(text, typing=True): print(f"\U0001f9ea [COMMAND] {text}")
+    def show_hud_reply(text, typing=True): print(f"\U0001f9ea [REPLY] {text}")
+    def show_fallback_in_hud(text): print(f"\U0001f9ea [FALLBACK] {text}")
+    def update_hud_text(text, category="info", typing=True): print(f"\U0001f9ea [{category.upper()}] {text}")
 
     main()
-
