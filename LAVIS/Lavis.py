@@ -1,5 +1,3 @@
-# Lavis.py (Final Full Version with Fixed Module Import)
-
 import os
 import re
 import time
@@ -22,7 +20,6 @@ from LAVIS.hud_display import show_fallback_in_hud, show_hud_reply, show_hud_com
 from jarvis_hud.components.hud_controller import HUDController
 from LAVIS.utils.hud_utils import get_hud_controller
 
-# ✅ FIX: Update these two lines
 from LAVIS.jarvis.commands.explorer import handle_explorer
 from LAVIS.jarvis.commands.input_control import handle_input_control
 
@@ -37,7 +34,6 @@ class LavisCore:
         self.control_mode = "normal"
 
         if hud_interface:
-            from jarvis_hud.components.hud_controller import HUDController
             self.hud_controller = HUDController(hud_interface)
         else:
             from LAVIS.utils.console_hud import ConsoleHUDController
@@ -70,8 +66,8 @@ class LavisCore:
         return False
 
     def extract_app_name(self, command: str) -> str:
-        match = re.search(r"open (.+)", command)
-        return match.group(1).strip() if match else ""
+        match = re.search(r"\b(open|start|launch|run)\b\s+(.+)", command.lower())
+        return match.group(2).strip() if match else ""
 
     def handle_input(self, input_text):
         if self.check_wake_phrase(input_text):
@@ -85,6 +81,7 @@ class LavisCore:
 
         command_lower = command.lower().strip()
 
+        # === Control Mode Switching ===
         if "activate master control" in command_lower:
             self.control_mode = "master_control"
             self.hud_speak("Master control activated. You can now control screen and apps only.")
@@ -109,6 +106,7 @@ class LavisCore:
             update_hud_status("Online")
             return
 
+        # === Master Control Mode ===
         if self.control_mode == "master_control":
             from LAVIS.jarvis.master_controll.command_handler import handle_voice_command
             if handle_voice_command(command):
@@ -119,11 +117,15 @@ class LavisCore:
             self.hud_speak("Command not allowed in master control mode.")
             return
 
+        # === Restricted Mode ===
         if self.control_mode == "restricted":
             if command.startswith("open "):
                 app_name = self.extract_app_name(command)
                 if app_name and open_windows_app(app_name):
                     show_hud_reply(f"Opening {app_name}")
+                    return
+                else:
+                    self.hud_speak(f"Restricted: Failed to open {app_name}")
                     return
             elif handle_explorer(command):
                 show_hud_reply("Handled file explorer command.")
@@ -131,23 +133,32 @@ class LavisCore:
             self.hud_speak("Command not allowed in restricted mode.")
             return
 
+        # === General Mode ===
         intent = detect_intent(command)
 
         if intent == "command":
-            if handle_command(command):
+            handled = handle_command(command)
+
+            app_name = self.extract_app_name(command)
+            if app_name:
+                if open_windows_app(app_name):
+                    show_hud_reply(f"Opening {app_name}")
+                    return
+                elif not handled:
+                    self.hud_speak(f"Sorry sir, I couldn't open {app_name}.")
+                    return
+
+            if handled:
                 show_hud_reply("Executed system command.")
                 return
-            app_name = self.extract_app_name(command)
-            if app_name and open_windows_app(app_name):
-                show_hud_reply(f"Opening {app_name}")
-                return
-            self.hud_speak(f"Sorry sir, I couldn't process the command: {command}")
 
-      
+            self.hud_speak(f"Sorry sir, I couldn't process the command: {command}")
+            return
 
         elif intent == "input_control":
             if handle_input_control(command):
                 show_hud_reply("Handled input control.")
+                return
 
         elif intent == "learning":
             self.session_state = "learning"
@@ -156,6 +167,7 @@ class LavisCore:
             update_hud_status("Learning")
             show_hud_reply("Exiting learning mode.")
             self.session_state = "normal"
+            return
 
         elif intent == "conversation":
             if len(command.strip().split()) < 3:
@@ -164,17 +176,19 @@ class LavisCore:
             self.session_state = "conversation"
             update_hud_status("normal")
             show_hud_reply("Responding to conversation...")
+            return
 
-        else:
-            show_hud_reply("Trying to find an answer...")
+        # === Fallback for unknown intent ===
+        show_hud_reply("Trying to find an answer...")
 
-            def run_fallback():
-                response = handle_fallback(command)
-                if response:
-                    self.session_state = "normal"
-                self.hud_controller.update(response or "Sorry, I couldn't find a response.", category="reply", typing=True)
+        def run_fallback():
+            response = handle_fallback(command)
+            if response:
+                self.session_state = "normal"
+            self.hud_controller.update(response or "Sorry, I couldn't find a response.", category="reply", typing=True)
 
-            threading.Thread(target=run_fallback, daemon=True).start()
+        threading.Thread(target=run_fallback, daemon=True).start()
+
 
 class LavisRunner:
     def __init__(self):
@@ -185,7 +199,7 @@ class LavisRunner:
             if not os.path.exists("jarvis.sqlite3"):
                 train_chatbot()
 
-            get_start_menu_apps()
+            get_start_menu_apps(force_reload=True)
             self.core.welcome()
             start_background_listening()
 
@@ -210,6 +224,7 @@ class LavisRunner:
 
 def main():
     LavisRunner().run()
+
 
 if __name__ == "__main__":
     print("\U0001f9ea Running Lavis in console-only mode (no HUD)")
