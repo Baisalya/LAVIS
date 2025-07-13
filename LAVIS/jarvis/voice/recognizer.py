@@ -1,72 +1,73 @@
 import os
 import json
 import time
-import traceback
 import threading
+import traceback
 from queue import Queue, Full
 
 import pyaudio
 from vosk import Model, KaldiRecognizer
 from kivy.clock import Clock
 
-from jarvis_hud.main import hud_interface
 from jarvis_hud.components.hud_controller import HUDController
 from LAVIS.utils.hud_utils import get_hud_controller
 from LAVIS.jarvis.voice.auth.voice_auth import check_long_audio_for_match
 
-# === Global Flags & State ===
-AUTHENTICATION_ENABLED = False  # 🔐 Toggle speaker verification ON/OFF
+# === Configuration ===
+AUTHENTICATION_ENABLED = False  # Toggle speaker verification
+VOSK_MODEL_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "vosk-model-en-in-0.5", "vosk-model-en-in-0.5"
+))
 
-recognizer = None
-stop_listening = None
+# === Globals ===
 command_queue = Queue()
 audio_stream = None
-
 _listening = False
 _paused = False
 _in_session = False
+
 _indicator_thread = None
 _listener_thread = None
+stop_listening = None
 
 # === Load Vosk model ===
 os.environ["VOSK_LOG_LEVEL"] = "0"
-model_path = os.path.abspath(os.path.join(
-    os.path.dirname(__file__), "..", "..", "vosk-model-en-in-0.5", "vosk-model-en-in-0.5"
-))
-model = Model(model_path)
+model = Model(VOSK_MODEL_PATH)
 
-# === Session Mode Controls ===
+
+# === Control Functions ===
 def set_session_mode(active: bool):
     global _in_session
     _in_session = active
-    print("🧠 Session mode:", "ON" if active else "OFF")
+    prefix = "SL:" if active else "L:"
     status = "💬 Session Chatting..." if active else "🟢 Listening"
-    controller = get_hud_controller()
-    if controller:
-        Clock.schedule_once(lambda dt: controller.type_live_text(f"{status} 🎙️"))
+    print(f"🧠 Session mode: {'ON' if active else 'OFF'}")
+    _update_hud_text(f"{prefix} {status} 🎙️")
 
 def pause_listening():
     global _paused
     _paused = True
     print("⏸️ Listening paused.")
-    controller = get_hud_controller()
-    if controller:
-        Clock.schedule_once(lambda dt: controller.type_live_text("⏸️ Listening paused 🎙️"))
+    _update_hud_text("⏸️ Listening paused 🎙️")
 
 def resume_listening():
     global _paused
     _paused = False
     print("▶️ Listening resumed.")
-    controller = get_hud_controller()
-    if controller:
-        Clock.schedule_once(lambda dt: controller.type_live_text("🟢 Listening resumed 🎙️"))
+    _update_hud_text("🟢 Listening resumed 🎙️")
 
 def toggle_auth(enabled: bool):
     global AUTHENTICATION_ENABLED
     AUTHENTICATION_ENABLED = enabled
     print(f"🔁 Voice authentication {'enabled ✅' if enabled else 'disabled ❌'}")
 
-# === Background HUD Indicator Animation ===
+def _update_hud_text(text: str):
+    controller = get_hud_controller()
+    if controller:
+        Clock.schedule_once(lambda dt: controller.type_live_text(text), 0)
+
+
+# === Listening HUD Animation Thread ===
 def _listening_indicator():
     animation = ['|', '/', '-', '\\']
     idx = 0
@@ -74,19 +75,17 @@ def _listening_indicator():
         if _paused:
             status = "⏸️ Paused"
         elif _in_session:
-            status = "💬 Session Chatting..."
+            status = f"SL: 💬 Session Chatting... {animation[idx % len(animation)]}"
         else:
-            status = f"🟢 Listening {animation[idx % len(animation)]}"
+            status = f"L: 🟢 Listening {animation[idx % len(animation)]}"
 
-        controller = get_hud_controller()
-        if controller:
-            Clock.schedule_once(lambda dt, text=status: controller.type_live_text(f"{text} 🎙️"), 0)
-
+        _update_hud_text(f"{status} 🎙️")
         idx += 1
         time.sleep(0.2)
-    print("\r🔴 Stopped background listening.")
+    print("🔴 Listening indicator thread exited.")
 
-# === Main Vosk Listening Loop ===
+
+# === Vosk Listener Thread ===
 def _vosk_listen_loop():
     global audio_stream
     pcm_buffer = bytearray()
@@ -103,7 +102,7 @@ def _vosk_listen_loop():
             frames_per_buffer=8000
         )
         audio_stream.start_stream()
-        rec = KaldiRecognizer(model, 16000)
+        recognizer = KaldiRecognizer(model, 16000)
 
         while _listening:
             if _paused:
@@ -118,90 +117,91 @@ def _vosk_listen_loop():
             if len(pcm_buffer) > 10 * 16000 * 2:
                 pcm_buffer = pcm_buffer[-5 * 16000 * 2:]
 
-            if rec.AcceptWaveform(data):
+            if recognizer.AcceptWaveform(data):
                 try:
-                    result = json.loads(rec.Result())
+                    result = json.loads(recognizer.Result())
                     query = result.get("text", "").strip().lower()
 
                     if not query:
-                        print("\n⛔ Ignored (empty result)")
+                        print("⛔ Ignored (empty result)")
                         _last_partial = ""
                         pcm_buffer.clear()
-                        rec.Reset()
+                        recognizer.Reset()
                         continue
 
                     controller = get_hud_controller()
 
                     if not AUTHENTICATION_ENABLED:
-                        print(f"\n⚠️ Skipped authentication: {query}")
+                        print(f"⚠️ Skipped authentication: {query}")
                         if controller:
                             Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
                         try:
-                            command_queue.put(query, block=False)
+                            command_queue.put_nowait(query)
                         except Full:
                             print("⚠️ Command queue full. Ignoring...")
 
                     else:
-                        print(f"🔐 Authenticating voice...")
-                        if controller:
-                            Clock.schedule_once(lambda dt: controller.type_live_text("🔐 Checking identity... 🎙️"), 0)
+                        print("🔐 Authenticating voice...")
+                        _update_hud_text("🔐 Checking identity... 🎙️")
 
                         if check_long_audio_for_match(bytes(pcm_buffer), threshold=0.65):
-                            print(f"\n✅ Authenticated: {query}")
+                            print(f"✅ Authenticated: {query}")
                             if controller:
                                 Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
-                            try:
-                                command_queue.put(query, block=False)
-                            except Full:
-                                print("⚠️ Command queue full. Ignoring...")
+                            command_queue.put_nowait(query)
                         else:
-                            print(f"\n❌ Authentication failed. Ignored: {query}")
-                            if controller:
-                                Clock.schedule_once(lambda dt: controller.type_live_text("❌ Unauthorized voice"), 0)
+                            print(f"❌ Authentication failed for: {query}")
+                            _update_hud_text("❌ Unauthorized voice")
 
                     pcm_buffer.clear()
                     _last_partial = ""
-                    rec.Reset()
+                    recognizer.Reset()
 
                 except Exception:
-                    print("\n⚠️ Error processing speech")
+                    print("⚠️ Error processing speech:")
                     traceback.print_exc()
                     pcm_buffer.clear()
+                    recognizer.Reset()
 
             else:
-                # Real-time partial update
-                partial_result = json.loads(rec.PartialResult())
+                # Live partial feedback
+                partial_result = json.loads(recognizer.PartialResult())
                 partial = partial_result.get("partial", "").strip().lower()
+
                 if partial and partial != _last_partial:
                     _last_partial = partial
-                    print(f"\r🔎 Partial: {partial}", end='', flush=True)
-                    controller = get_hud_controller()
-                    if controller:
-                        Clock.schedule_once(lambda dt: controller.type_live_text(f"🗣️ {partial}"), 0)
+                    print(f"🔎 Partial: {partial}")
+                    _update_hud_text(f"🗣️ {partial}")
 
         if audio_stream:
             audio_stream.stop_stream()
             audio_stream.close()
             audio_stream = None
 
-    except Exception:
-        print("\n🚫 Mic or audio stream error:")
+    except Exception as e:
+        print("🚫 Audio device or recognition error:")
         traceback.print_exc()
+
     finally:
-        if p is not None:
+        if p:
             p.terminate()
+
 
 # === Start Background Listening ===
 def start_background_listening():
     global _listening, _indicator_thread, _listener_thread, stop_listening
-    print("🎤 Calibrating mic...")
+
+    if _listening:
+        print("⚠️ Already listening.")
+        return
+
+    print("🎤 Starting background listening...")
     _listening = True
 
-    _indicator_thread = threading.Thread(target=_listening_indicator)
+    _indicator_thread = threading.Thread(target=_listening_indicator, daemon=True)
     _indicator_thread.start()
 
-    _listener_thread = threading.Thread(target=_vosk_listen_loop)
-    _listener_thread.daemon = True
+    _listener_thread = threading.Thread(target=_vosk_listen_loop, daemon=True)
     _listener_thread.start()
 
     def stop():
@@ -210,20 +210,22 @@ def start_background_listening():
 
     stop_listening = stop
 
+
 # === Stop Background Listening ===
 def stop_background_listening():
     global stop_listening, _indicator_thread, _listener_thread, audio_stream
     _listening = False
+
     if stop_listening:
         stop_listening()
         stop_listening = None
 
-    if _indicator_thread:
-        _indicator_thread.join()
+    if _indicator_thread and _indicator_thread.is_alive():
+        _indicator_thread.join(timeout=1)
         _indicator_thread = None
 
-    if _listener_thread:
-        _listener_thread.join()
+    if _listener_thread and _listener_thread.is_alive():
+        _listener_thread.join(timeout=1)
         _listener_thread = None
 
     if audio_stream:

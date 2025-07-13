@@ -18,6 +18,10 @@ def is_connected():
         return True
     except:
         return False
+# llm_integration/ollama_utils.py
+
+import requests
+import json
 
 def ask_ollama(prompt: str, model: str = "tinyllama") -> str:
     try:
@@ -29,7 +33,7 @@ def ask_ollama(prompt: str, model: str = "tinyllama") -> str:
         return data.get("response", "").strip()
     except Exception as e:
         print("❌ Ollama error:", e)
-        return "Sorry, I couldn't think of a response right now."
+        return "unknown"
 
 def install_ollama_windows():
     print("⬇️ Downloading Ollama installer...")

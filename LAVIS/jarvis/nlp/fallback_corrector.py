@@ -1,30 +1,27 @@
-import json
 import os
-import difflib
+import json
+from rapidfuzz import process, fuzz
+from symspellpy.symspellpy import SymSpell, Verbosity
 
-# ✅ Use correct import path for latest optimum
-try:
-    from transformers import T5Tokenizer
-    from optimum.onnxruntime.modeling_ort import ORTModelForConditionalGeneration
-
-    # Set ONNX model path (relative to this file)
-    ONNX_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../t5-small-onnx"))
-    tokenizer = T5Tokenizer.from_pretrained(ONNX_DIR)
-    model = ORTModelForConditionalGeneration.from_pretrained(ONNX_DIR)
-    T5_AVAILABLE = True
-except Exception as e:
-    print("⚠️ T5-ONNX model could not be loaded:", e)
-    T5_AVAILABLE = False
-
-# === Config ===
-COMMAND_FILE = os.path.join(os.path.dirname(__file__), "user_commands.json")
+# === Paths and Constants ===
+BASE_DIR = os.path.dirname(__file__)
+DICT_PATH = os.path.join(BASE_DIR, "dict", "frequency_dictionary_en_82_765.txt")
+COMMAND_FILE = os.path.join(BASE_DIR, "user_commands.json")
 DEFAULT_COMMANDS = [
-    "open chrome", "open calculator", "what is your name",
+    "open chrome", "open whatsapp", "start calculator", "launch notepad",
     "play music", "stop music", "shutdown", "restart",
-    "pause listening", "resume listening", "what is the weather",
-    "turn on the lights", "turn off the lights", "exit session",
-    "start session", "hello jarvis", "goodbye"
+    "pause listening", "resume listening", "turn on the lights", "turn off the lights",
+    "exit session", "start session", "hello jarvis", "goodbye"
 ]
+
+# === Load SymSpell ===
+
+sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
+if not sym_spell.load_dictionary(DICT_PATH, term_index=0, count_index=1):
+    print("⚠️ SymSpell dictionary not found or failed to load. Download it from:")
+    print("🔗 https://github.com/wolfgarbe/SymSpell/tree/master/SymSpell/frequency_dictionary")
+
+# === Load & Save Commands ===
 
 def load_commands():
     if os.path.exists(COMMAND_FILE):
@@ -45,38 +42,35 @@ def save_new_command(new_command: str):
             existing.append(new_command)
             with open(COMMAND_FILE, "w") as f:
                 json.dump(existing, f, indent=2)
-    except:
-        pass
+    except Exception as e:
+        print(f"❌ Error saving new command: {e}")
 
-# === Correction pipeline ===
+# === Main Correction Function ===
+
 def correct_command(text: str) -> str:
     if not text:
         return ""
 
-    original = text
-    text = text.strip().lower()
+    original = text.strip().lower()
 
-    # Step 1: T5 grammar correction
-    if T5_AVAILABLE:
-        try:
-            input_text = f"fix: {text}"
-            inputs = tokenizer(input_text, return_tensors="pt")
-            outputs = model.generate(**inputs, max_length=32)
-            text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            print(f"🤖 T5-ONNX corrected: '{original}' → '{text}'")
-        except Exception as e:
-            print("⚠️ T5 correction failed, using fallback fuzzy:", e)
+    # Step 1: SymSpell spelling correction
+    suggestions = sym_spell.lookup_compound(original, max_edit_distance=2)
+    corrected = suggestions[0].term if suggestions else original
+    if corrected != original:
+        print(f"🔤 SymSpell corrected: '{original}' → '{corrected}'")
 
-    # Step 2: Fuzzy match to known commands
+    # Step 2: RapidFuzz best match
     all_commands = load_commands()
-    matches = difflib.get_close_matches(text, all_commands, n=1, cutoff=0.6)
-    corrected = matches[0] if matches else text
+    match, score, _ = process.extractOne(corrected, all_commands, scorer=fuzz.ratio)
 
-    if corrected != text:
-        print(f"🛠️ Fuzzy corrected: '{text}' → '{corrected}'")
-    elif corrected not in all_commands:
-        print(f"💡 New command learned: '{corrected}'")
+    if score > 80:
+        if match != corrected:
+            print(f"🧠 Matched to known command: '{corrected}' → '{match}'")
+        return match
+
+    # Step 3: Learn unknown commands
+    if corrected not in all_commands:
+        print(f"💡 Learned new command: '{corrected}'")
         save_new_command(corrected)
 
     return corrected
-    

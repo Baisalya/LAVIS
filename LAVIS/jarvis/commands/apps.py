@@ -3,6 +3,7 @@ import subprocess
 import win32com.client
 import re
 from fuzzywuzzy import fuzz
+import webbrowser
 
 _app_cache = None  # Cache to avoid reloading every time
 
@@ -66,8 +67,11 @@ def get_start_menu_apps(force_reload=False):
     return _app_cache
 
 def open_windows_app(app_name: str) -> bool:
-    apps = get_start_menu_apps()
-
+    """
+    Fuzzy matches and launches a Windows or UWP app from the cached start menu list.
+    If not found, open the app's page in Microsoft Store.
+    Returns True if the app is successfully launched or redirected to store.
+    """
     def find_best(apps):
         best_match = None
         highest_score = 0
@@ -78,16 +82,17 @@ def open_windows_app(app_name: str) -> bool:
                 best_match = app
         return best_match, highest_score
 
-    best_match, score = find_best(apps)
+    apps = get_start_menu_apps()
+    best_match, highest_score = find_best(apps)
 
-    # Retry if not found
-    if not best_match or score < 70:
-        print(f"[INFO] No good match for '{app_name}'. Reloading apps cache...")
+    # Retry with fresh app list if no good match
+    if not best_match or highest_score < 70:
+        print(f"[INFO] Reloading app list and retrying...")
         apps = get_start_menu_apps(force_reload=True)
-        best_match, score = find_best(apps)
+        best_match, highest_score = find_best(apps)
 
-    if best_match and score >= 70:
-        print(f"[DEBUG] 🎯 Best match: {best_match['name']} ({score}%)")
+    if best_match and highest_score >= 70:
+        print(f"[DEBUG] 🎯 Best match: {best_match['name']} ({highest_score}%)")
         print(f"[DEBUG] 🚀 Launch type: {best_match['type']}")
         print(f"[DEBUG] 🛣️ Launch target: {best_match['target']}")
 
@@ -110,5 +115,12 @@ def open_windows_app(app_name: str) -> bool:
             print(f"[ERROR] ❌ Failed to open {best_match['name']}: {e}")
             return False
 
-    print(f"[WARN] ❌ No matching app found for: {app_name}")
-    return False
+    # If no app found, open Microsoft Store with search
+    print(f"[STORE] App '{app_name}' not found. Opening Microsoft Store search page...")
+    try:
+        query = app_name.replace(" ", "%20")
+        webbrowser.open(f"https://apps.microsoft.com/store/search/{query}?hl=en-us")
+        return True
+    except Exception as e:
+        print(f"[ERROR] ❌ Failed to open Microsoft Store: {e}")
+        return False
