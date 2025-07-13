@@ -121,12 +121,13 @@ class LavisCore:
         if self.control_mode == "restricted":
             if command.startswith("open "):
                 app_name = self.extract_app_name(command)
-                if app_name and open_windows_app(app_name):
-                    show_hud_reply(f"Opening {app_name}")
-                    return
-                else:
-                    self.hud_speak(f"Restricted: Failed to open {app_name}")
-                    return
+                if app_name:
+                    if open_windows_app(app_name):
+                        show_hud_reply(f"Opening {app_name}")
+                        return
+                    else:
+                        self.hud_speak(f"Restricted: Failed to open {app_name}")
+                        return
             elif handle_explorer(command):
                 show_hud_reply("Handled file explorer command.")
                 return
@@ -141,7 +142,8 @@ class LavisCore:
 
             app_name = self.extract_app_name(command)
             if app_name:
-                if open_windows_app(app_name):
+                success = open_windows_app(app_name)
+                if success:
                     show_hud_reply(f"Opening {app_name}")
                     return
                 elif not handled:
@@ -235,4 +237,3 @@ if __name__ == "__main__":
     def update_hud_text(text, category="info", typing=True): print(f"\U0001f9ea [{category.upper()}] {text}")
 
     main()
-#
