@@ -74,7 +74,12 @@ class LavisCore:
         command = re.sub(rf"\b{WAKE_WORD}\b", "", input_text, flags=re.IGNORECASE).strip() or input_text
         self.hud_controller.update(command, category="command", typing=True)
         command_lower = command.lower().strip()
-
+  # ✅ === Hand Control Activation ===
+        if "activate hand control" in command_lower:
+            self.hud_speak("Activating hand control mode. Use your hand to control the system.")
+            from LAVIS.jarvis.master_controll.hand_controller import HandControl
+            threading.Thread(target=HandControl().run, daemon=True).start()
+            return
         # ✅ === Early Mode Switching ===
         if "activate master control" in command_lower:
             self.control_mode = "master_control"
