@@ -1,7 +1,8 @@
 {
     "ollama_model": "tinyllama",
     "groq_api_key": "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",
-    "fallback_priority": ["ollama", "groq", "wikipedia", "duckduckgo", "chatbot"],
+    "gemini_api_key":"AIzaSyDvaz69Z6TkY3OzWNZZW4TLaNq-bM89mBY",
+    "fallback_priority": ["gemini","ollama", "groq", "wikipedia", "duckduckgo", "chatbot"],
     "fallback_auto_converse": false
   }
   

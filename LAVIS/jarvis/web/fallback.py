@@ -61,24 +61,27 @@ def handle_fallback(command: str) -> bool:
     priority_list = config.get("fallback_priority")
     auto_converse = config.get("fallback_auto_converse", False)
 
-    # 🧠 Intent and Emotion Filter
+    # 🧠 Detect intent + emotion
     intent = detect_intent(command)
     emotion = detect_emotion(command)
+    print(f"[🧠] Intent: {intent}, Emotion: {emotion}")
 
-    if intent not in ["conversation", "unknown"] and "?" not in command:
-        print("🤖 Skipping fallback: Not a valid question or discussion.")
+    auto_read = (emotion == "negative")  # 🚀 Auto-read aloud if sad/angry/etc
+
+    if len(command.split()) < 2 and "?" not in command:
+        print("🧠 Too short. Skipping.")
         return False
 
-    if emotion == "neutral" and "?" not in command:
-        print("🧠 Neutral tone without question. Skipping fallback.")
+    if intent not in ["conversation", "unknown"] and emotion == "neutral" and "?" not in command:
+        print("🧠 Skipping fallback: No reason to respond.")
         return False
 
     set_session_mode(True)
     print("\n🔁 Session mode ON (fallback)")
 
     BAD_RESPONSES = [
-        "i apologize", "i'm not sure", "please provide", 
-        "no text for me to read", "i don’t know", "i don't have", 
+        "i apologize", "i'm not sure", "please provide",
+        "no text for me to read", "i don’t know", "i don't have",
         "i'm sorry", "as an ai", "i am not able", "not found"
     ]
 
@@ -88,19 +91,17 @@ def handle_fallback(command: str) -> bool:
         try:
             if method == "ollama":
                 prompt = (
-                    f"You are a helpful and friendly assistant. Only reply if the user seems to ask something, "
-                    f"needs help, or shows emotional tone.\n\n"
+                    f"You are a warm, supportive assistant. Always respond if the user shows emotion or speaks like a friend.\n\n"
                     f"User said: \"{command}\"\n\n"
-                    f"If it's not appropriate to reply, respond only with: SKIP.\n"
-                    f"Otherwise, give a warm, helpful response like a friend."
+                    f"Give an empathetic, comforting, or friendly response."
                 )
                 response = ask_ollama(prompt)
 
             elif method == "groq":
                 prompt = (
-                    f"You are a helpful AI companion. If the user is asking a genuine question or is emotional, respond warmly.\n\n"
-                    f"User said: \"{command}\"\n\n"
-                    f"If it's not suitable to respond, reply only with SKIP."
+                    f"You're a caring AI companion. The user just said:\n\n"
+                    f"\"{command}\"\n\n"
+                    f"Respond warmly like a friend would. Comfort them or offer something thoughtful."
                 )
                 response = ask_groq(prompt)
 
@@ -123,14 +124,12 @@ def handle_fallback(command: str) -> bool:
                     print(f"⚠️ Skipping bad fallback response from {method}: {response}")
                     continue
 
-                # ✅ Valid response
                 last_fallback_response = response
-                print("🧠 Answer stored. Say 'read it' to hear it.")
-                print("\n📄 Here's what I found:\n" + last_fallback_response)
-
                 show_fallback_in_hud(last_fallback_response)
 
-                if auto_converse:
+                if auto_read:
+                    human_speak(last_fallback_response)  # 🗣️ auto speak
+                elif auto_converse:
                     human_speak(last_fallback_response)
                     resume_listening()
                     set_session_mode(False)
@@ -148,7 +147,7 @@ def handle_fallback(command: str) -> bool:
         return False
 
     start_time = time.time()
-    is_reading = False
+    is_reading = auto_read
 
     while time.time() - start_time < 60:
         if not command_queue.empty():
@@ -161,13 +160,12 @@ def handle_fallback(command: str) -> bool:
                     speak("Okay, I’ve paused the answer. You can ask more.")
                     is_reading = False
                 else:
-                    print("⚠️ Ignoring non-stop input during reading.")
+                    print("🔇 Ignored input during reading.")
                 continue
 
             if follow_up in ["read it", "read the answer", "speak it", "tell me"]:
-                if not is_reading:
-                    is_reading = True
-                    human_speak(last_fallback_response)
+                is_reading = True
+                human_speak(last_fallback_response)
                 continue
 
             elif follow_up in ["exit", "close", "thank you"]:
