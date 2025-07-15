@@ -88,7 +88,6 @@ def _listening_indicator():
 # === Vosk Listener Thread ===
 def _vosk_listen_loop():
     global audio_stream
-    pcm_buffer = bytearray()
     _last_partial = ""
     p = None
 
@@ -99,72 +98,65 @@ def _vosk_listen_loop():
             channels=1,
             rate=16000,
             input=True,
-            frames_per_buffer=8000
+            frames_per_buffer=2000  # Smaller frame for quicker reaction
         )
         audio_stream.start_stream()
-        recognizer = KaldiRecognizer(model, 16000)
+        recognizer = KaldiRecognizer(model, 16000, '["open browser", "shutdown", "hello jarvis"]')
+        recognizer.SetWords(True)
+
+        last_speech_time = time.time()
+        silence_timeout = 2.0  # Seconds of silence to auto-reset
 
         while _listening:
             if _paused:
                 time.sleep(0.1)
                 continue
 
-            data = audio_stream.read(4000, exception_on_overflow=False)
+            data = audio_stream.read(2000, exception_on_overflow=False)
             if not data:
                 continue
 
-            pcm_buffer.extend(data)
-            if len(pcm_buffer) > 10 * 16000 * 2:
-                pcm_buffer = pcm_buffer[-5 * 16000 * 2:]
+            now = time.time()
 
+            # Feed data to recognizer
             if recognizer.AcceptWaveform(data):
-                try:
-                    result = json.loads(recognizer.Result())
-                    query = result.get("text", "").strip().lower()
+                result = json.loads(recognizer.Result())
+                query = result.get("text", "").strip().lower()
 
-                    if not query:
-                        print("⛔ Ignored (empty result)")
-                        _last_partial = ""
-                        pcm_buffer.clear()
-                        recognizer.Reset()
-                        continue
-
-                    controller = get_hud_controller()
-
-                    if not AUTHENTICATION_ENABLED:
-                        print(f"⚠️ Skipped authentication: {query}")
-                        if controller:
-                            Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
-                        try:
-                            command_queue.put_nowait(query)
-                        except Full:
-                            print("⚠️ Command queue full. Ignoring...")
-
-                    else:
-                        print("🔐 Authenticating voice...")
-                        _update_hud_text("🔐 Checking identity... 🎙️")
-
-                        if check_long_audio_for_match(bytes(pcm_buffer), threshold=0.65):
-                            print(f"✅ Authenticated: {query}")
-                            if controller:
-                                Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
-                            command_queue.put_nowait(query)
-                        else:
-                            print(f"❌ Authentication failed for: {query}")
-                            _update_hud_text("❌ Unauthorized voice")
-
-                    pcm_buffer.clear()
+                if not query:
+                    print("⛔ Ignored (empty result)")
                     _last_partial = ""
                     recognizer.Reset()
+                    continue
 
-                except Exception:
-                    print("⚠️ Error processing speech:")
-                    traceback.print_exc()
-                    pcm_buffer.clear()
-                    recognizer.Reset()
+                controller = get_hud_controller()
+
+                if not AUTHENTICATION_ENABLED:
+                    print(f"⚠️ Skipped authentication: {query}")
+                    if controller:
+                        Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
+                    try:
+                        command_queue.put_nowait(query)
+                    except Full:
+                        print("⚠️ Command queue full. Ignoring...")
+                else:
+                    print("🔐 Authenticating voice...")
+                    _update_hud_text("🔐 Checking identity... 🎙️")
+                    if check_long_audio_for_match(data, threshold=0.65):
+                        print(f"✅ Authenticated: {query}")
+                        if controller:
+                            Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
+                        command_queue.put_nowait(query)
+                    else:
+                        print(f"❌ Authentication failed for: {query}")
+                        _update_hud_text("❌ Unauthorized voice")
+
+                _last_partial = ""
+                recognizer.Reset()
+                last_speech_time = now
 
             else:
-                # Live partial feedback
+                # Show partial as user is speaking
                 partial_result = json.loads(recognizer.PartialResult())
                 partial = partial_result.get("partial", "").strip().lower()
 
@@ -172,21 +164,25 @@ def _vosk_listen_loop():
                     _last_partial = partial
                     print(f"🔎 Partial: {partial}")
                     _update_hud_text(f"🗣️ {partial}")
+                    last_speech_time = now
+
+                # Reset if silence is too long
+                if now - last_speech_time > silence_timeout:
+                    _last_partial = ""
+                    recognizer.Reset()
+                    last_speech_time = now
 
         if audio_stream:
             audio_stream.stop_stream()
             audio_stream.close()
             audio_stream = None
 
-    except Exception as e:
+    except Exception:
         print("🚫 Audio device or recognition error:")
         traceback.print_exc()
-
     finally:
         if p:
             p.terminate()
-
-
 # === Start Background Listening ===
 def start_background_listening():
     global _listening, _indicator_thread, _listener_thread, stop_listening

@@ -3,15 +3,24 @@ from kivy.app import App
 from .widgets.sci_fi_hud import HUDInterface
 from kivy.lang import Builder
 
+
 hud_interface = None
+
 class SciFiApp(App):
     def build(self):
         self.title = "LAVIS"
-        Builder.load_file("jarvis_hud/kv/sci_fi.kv")    
+        Builder.load_file("jarvis_hud/kv/sci_fi.kv")
 
         global hud_interface
-        hud_interface = HUDInterface()
+        try:
+            hud_interface = HUDInterface()
+        except Exception as e:
+            print("[ERROR] Failed to load HUDInterface:", e)
+            from kivy.uix.label import Label
+            return Label(text="HUD crashed. Check console.")
+        
         return hud_interface
+
     
 def update_hud_status(new_status: str):
     if hud_interface:
