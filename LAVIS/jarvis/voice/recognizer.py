@@ -13,8 +13,14 @@ from jarvis_hud.components.hud_controller import HUDController
 from LAVIS.utils.hud_utils import get_hud_controller
 from LAVIS.jarvis.voice.auth.voice_auth import check_long_audio_for_match
 
+# === Try importing HUD logging ===
+try:
+    from jarvis_hud.main import append_hud_console
+except ImportError:
+    def append_hud_console(message): pass
+
 # === Configuration ===
-AUTHENTICATION_ENABLED = False  # Toggle speaker verification
+AUTHENTICATION_ENABLED = False
 VOSK_MODEL_PATH = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "..", "vosk-model-en-in-0.5", "vosk-model-en-in-0.5"
 ))
@@ -34,40 +40,47 @@ stop_listening = None
 os.environ["VOSK_LOG_LEVEL"] = "0"
 model = Model(VOSK_MODEL_PATH)
 
-
-# === Control Functions ===
-def set_session_mode(active: bool):
-    global _in_session
-    _in_session = active
-    prefix = "SL:" if active else "L:"
-    status = "💬 Session Chatting..." if active else "🟢 Listening"
-    print(f"🧠 Session mode: {'ON' if active else 'OFF'}")
-    _update_hud_text(f"{prefix} {status} 🎙️")
-
-def pause_listening():
-    global _paused
-    _paused = True
-    print("⏸️ Listening paused.")
-    _update_hud_text("⏸️ Listening paused 🎙️")
-
-def resume_listening():
-    global _paused
-    _paused = False
-    print("▶️ Listening resumed.")
-    _update_hud_text("🟢 Listening resumed 🎙️")
-
-def toggle_auth(enabled: bool):
-    global AUTHENTICATION_ENABLED
-    AUTHENTICATION_ENABLED = enabled
-    print(f"🔁 Voice authentication {'enabled ✅' if enabled else 'disabled ❌'}")
-
+# === Internal HUD Update ===
 def _update_hud_text(text: str):
     controller = get_hud_controller()
     if controller:
         Clock.schedule_once(lambda dt: controller.type_live_text(text), 0)
 
+# === State Control ===
+def set_session_mode(active: bool):
+    global _in_session
+    _in_session = active
+    prefix = "SL:" if active else "L:"
+    status = "💬 Session Chatting..." if active else "🟢 Listening"
+    msg = f"🧠 Session mode: {'ON' if active else 'OFF'}"
+    print(msg)
+    append_hud_console(msg)
+    _update_hud_text(f"{prefix} {status} 🎙️")
 
-# === Listening HUD Animation Thread ===
+def pause_listening():
+    global _paused
+    _paused = True
+    msg = "⏸️ Listening paused."
+    print(msg)
+    append_hud_console(msg)
+    _update_hud_text("⏸️ Listening paused 🎙️")
+
+def resume_listening():
+    global _paused
+    _paused = False
+    msg = "▶️ Listening resumed."
+    print(msg)
+    append_hud_console(msg)
+    _update_hud_text("🟢 Listening resumed 🎙️")
+
+def toggle_auth(enabled: bool):
+    global AUTHENTICATION_ENABLED
+    AUTHENTICATION_ENABLED = enabled
+    msg = f"🔁 Voice authentication {'enabled ✅' if enabled else 'disabled ❌'}"
+    print(msg)
+    append_hud_console(msg)
+
+# === Listening HUD Animation ===
 def _listening_indicator():
     animation = ['|', '/', '-', '\\']
     idx = 0
@@ -82,10 +95,12 @@ def _listening_indicator():
         _update_hud_text(f"{status} 🎙️")
         idx += 1
         time.sleep(0.2)
-    print("🔴 Listening indicator thread exited.")
 
+    msg = "🔴 Listening indicator thread exited."
+    print(msg)
+    append_hud_console(msg)
 
-# === Vosk Listener Thread ===
+# === Vosk Listening Thread ===
 def _vosk_listen_loop():
     global audio_stream
     _last_partial = ""
@@ -98,14 +113,14 @@ def _vosk_listen_loop():
             channels=1,
             rate=16000,
             input=True,
-            frames_per_buffer=2000  # Smaller frame for quicker reaction
+            frames_per_buffer=2000
         )
         audio_stream.start_stream()
         recognizer = KaldiRecognizer(model, 16000, '["open browser", "shutdown", "hello jarvis"]')
         recognizer.SetWords(True)
 
         last_speech_time = time.time()
-        silence_timeout = 2.0  # Seconds of silence to auto-reset
+        silence_timeout = 2.0
 
         while _listening:
             if _paused:
@@ -118,13 +133,14 @@ def _vosk_listen_loop():
 
             now = time.time()
 
-            # Feed data to recognizer
             if recognizer.AcceptWaveform(data):
                 result = json.loads(recognizer.Result())
                 query = result.get("text", "").strip().lower()
 
                 if not query:
-                    print("⛔ Ignored (empty result)")
+                    msg = "⛔ Ignored (empty result)"
+                    print(msg)
+                    append_hud_console(msg)
                     _last_partial = ""
                     recognizer.Reset()
                     continue
@@ -132,23 +148,33 @@ def _vosk_listen_loop():
                 controller = get_hud_controller()
 
                 if not AUTHENTICATION_ENABLED:
-                    print(f"⚠️ Skipped authentication: {query}")
+                    msg = f"⚠️ Skipped authentication: {query}"
+                    print(msg)
+                    append_hud_console(msg)
                     if controller:
                         Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
                     try:
                         command_queue.put_nowait(query)
                     except Full:
-                        print("⚠️ Command queue full. Ignoring...")
+                        msg = "⚠️ Command queue full. Ignoring..."
+                        print(msg)
+                        append_hud_console(msg)
                 else:
-                    print("🔐 Authenticating voice...")
+                    msg = "🔐 Authenticating voice..."
+                    print(msg)
+                    append_hud_console(msg)
                     _update_hud_text("🔐 Checking identity... 🎙️")
                     if check_long_audio_for_match(data, threshold=0.65):
-                        print(f"✅ Authenticated: {query}")
+                        msg = f"✅ Authenticated: {query}"
+                        print(msg)
+                        append_hud_console(msg)
                         if controller:
                             Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
                         command_queue.put_nowait(query)
                     else:
-                        print(f"❌ Authentication failed for: {query}")
+                        msg = f"❌ Authentication failed for: {query}"
+                        print(msg)
+                        append_hud_console(msg)
                         _update_hud_text("❌ Unauthorized voice")
 
                 _last_partial = ""
@@ -156,17 +182,17 @@ def _vosk_listen_loop():
                 last_speech_time = now
 
             else:
-                # Show partial as user is speaking
                 partial_result = json.loads(recognizer.PartialResult())
                 partial = partial_result.get("partial", "").strip().lower()
 
                 if partial and partial != _last_partial:
                     _last_partial = partial
-                    print(f"🔎 Partial: {partial}")
+                    msg = f"🔎 Partial: {partial}"
+                    print(msg)
+                    append_hud_console(msg)
                     _update_hud_text(f"🗣️ {partial}")
                     last_speech_time = now
 
-                # Reset if silence is too long
                 if now - last_speech_time > silence_timeout:
                     _last_partial = ""
                     recognizer.Reset()
@@ -178,20 +204,28 @@ def _vosk_listen_loop():
             audio_stream = None
 
     except Exception:
-        print("🚫 Audio device or recognition error:")
+        msg = "🚫 Audio device or recognition error:"
+        print(msg)
+        append_hud_console(msg)
         traceback.print_exc()
     finally:
         if p:
             p.terminate()
-# === Start Background Listening ===
+
+# === Background Listening Control ===
 def start_background_listening():
     global _listening, _indicator_thread, _listener_thread, stop_listening
 
     if _listening:
-        print("⚠️ Already listening.")
+        msg = "⚠️ Already listening."
+        print(msg)
+        append_hud_console(msg)
         return
 
-    print("🎤 Starting background listening...")
+    msg = "🎤 Starting background listening..."
+    print(msg)
+    append_hud_console(msg)
+
     _listening = True
 
     _indicator_thread = threading.Thread(target=_listening_indicator, daemon=True)
@@ -206,8 +240,6 @@ def start_background_listening():
 
     stop_listening = stop
 
-
-# === Stop Background Listening ===
 def stop_background_listening():
     global stop_listening, _indicator_thread, _listener_thread, audio_stream
     _listening = False

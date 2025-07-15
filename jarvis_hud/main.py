@@ -33,3 +33,8 @@ def update_hud_text(message: str, category="info", typing=True):
     else:
         print(f"[HUD] Skipped: {message}")
 
+def append_hud_console(message: str):
+    if hud_interface:
+        hud_interface.append_console_log(message)
+    else:
+        print(f"[HUD CONSOLE] Skipped: {message}")
