@@ -1,5 +1,4 @@
 import os
-import sys
 from datetime import datetime
 
 from kivy.uix.floatlayout import FloatLayout
@@ -17,30 +16,27 @@ from .SideGlowOverlay import SideGlowOverlay
 from ..components.hud_text_overlay import HUDTextOverlay
 from ..components.hud_controller import HUDController
 
-# Load KV layout (optional)
+# Load KV layout
 Builder.load_file("jarvis_hud/kv/sci_fi.kv")
 
 
 class HUDInterface(FloatLayout):
-    system_status = StringProperty("sleep")         # Controls system status label
-    hud_log_console = StringProperty("")            # ✅ Live console-style HUD log
+    system_status = StringProperty("sleep")         # System state label
+    hud_log_console = StringProperty("")            # ✅ Live console log display
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        # === Layer 1: Grid overlay ===
+        # === Layered HUD Elements ===
         self.grid_overlay = GridOverlay()
         self.add_widget(self.grid_overlay)
 
-        # === Layer 2: Moving horizontal lines ===
         self.moving_lines = MovingHorizontalLinesOverlay()
         self.add_widget(self.moving_lines)
 
-        # === Layer 3: Particle fog effect ===
         self.fog_overlay = ParticleFogOverlay()
         self.add_widget(self.fog_overlay)
 
-        # === Layer 4: Central Jarvis core animation ===
         self.core = JarvisCore(
             size_hint=(None, None),
             size=(500, 500),
@@ -48,48 +44,45 @@ class HUDInterface(FloatLayout):
         )
         self.add_widget(self.core)
 
-        # === Layer 5: Side glow overlays ===
         self.side_glow = SideGlowOverlay(
-            left_color=[1, 0, 0, 0.15],     # Red glow left
-            right_color=[0, 1, 1, 0.15],    # Cyan glow right
+            left_color=[1, 0, 0, 0.15],
+            right_color=[0, 1, 1, 0.15],
         )
         self.add_widget(self.side_glow)
 
-        # === Layer 6: Text overlay layer (replies / prompts) ===
         self.text_overlay = HUDTextOverlay()
         self.add_widget(self.text_overlay)
 
-        # === HUD Controller (handles typed display updates) ===
         self.hud_controller = HUDController(self)
 
-        # Optional: Live clock/date update
+        # Optional live clock updater
         Clock.schedule_interval(self.update_time, 1)
 
     def update_status(self, new_status):
-        """Update system status label."""
+        """Update status label text."""
         self.system_status = new_status
 
     def update_text(self, message: str, category="info", typing=True):
-        """Used for assistant reply, prompts, etc."""
+        """Display reply/prompt on the HUD."""
         if self.hud_controller:
             self.hud_controller.update(message, category, typing)
 
     def append_console_log(self, message: str):
-        """Append live messages to HUD console (separate from status)."""
+        """Append message to live log with scroll."""
         logs = self.hud_log_console.splitlines()
         logs.append(message)
-        self.hud_log_console = "\n".join(logs[-30:])  # Only keep last 30 lines
-        Clock.schedule_once(lambda dt: self.scroll_to_bottom(), 0)
-# ✅ Scroll to bottom after label updates (on next frame)
-    def scroll_to_bottom(self, *_):
+        self.hud_log_console = "\n".join(logs[-30:])  # Keep last 30 lines
+        Clock.schedule_once(self.scroll_console_to_bottom, 0.01)
 
-        scroll = self.ids.get("console_scroll")
-        if scroll:
-            scroll.scroll_y = 0  # 0 = bottom, 1 = top
+    def scroll_console_to_bottom(self, *args):
+        """Auto-scroll to the bottom of log display."""
+        try:
+            self.ids.console_scroll.scroll_y = 0
+        except Exception as e:
+            print("[LogScrollError]", e)
 
-   
     def update_time(self, dt):
-        """Update any time/date labels via .kv `ids`."""
+        """Update date/time labels via KV IDs."""
         now = datetime.now()
         time_str = now.strftime("%I:%M:%S %p")
         date_str = now.strftime("%Y.%m.%d")
