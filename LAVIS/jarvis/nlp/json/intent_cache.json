@@ -156,5 +156,17 @@
   "tell me yesterday": "command",
   "until beat me": "unknown",
   "she she": "unknown",
-  "they cape": "unknown"
+  "they cape": "unknown",
+  "combat": "unknown",
+  "who created you": "learning",
+  "of north up": "unknown",
+  "mush tax girl": "unknown",
+  "anti about her wake you": "unknown",
+  "coming over tonight i gotta think of": "conversation",
+  "ahmad is okay": "conversation",
+  "anyway": "conversation",
+  "megan": "input_control",
+  "on ice": "command",
+  "sap": "unknown",
+  "zap": "command"
 }

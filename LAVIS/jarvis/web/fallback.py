@@ -11,6 +11,7 @@ from LAVIS.jarvis.network import is_connected
 from LAVIS.jarvis.voice.recognizer import command_queue, resume_listening, set_session_mode
 from LAVIS.hud_display import show_fallback_in_hud
 from LAVIS.jarvis.nlp.intent_detector import detect_intent
+from LAVIS.jarvis.apps.userai.user_profile import load_user_profile, answer_about_user
 
 last_fallback_response = None
 
@@ -57,24 +58,34 @@ def handle_fallback(command: str) -> bool:
     global last_fallback_response
     from LAVIS.jarvis.commands.commands import handle_command  # Prevent circular import
 
-    config = load_config()
-    priority_list = config.get("fallback_priority")
-    auto_converse = config.get("fallback_auto_converse", False)
+    # ✅ Load profile first
+    profile = load_user_profile()
+    personal_answer = answer_about_user(command, profile)
+    if personal_answer:
+        print("✅ Personal profile response triggered.")
+        last_fallback_response = personal_answer
+        show_fallback_in_hud(personal_answer)
+        human_speak(personal_answer)  # Auto read it aloud
+        return True
 
     # 🧠 Detect intent + emotion
     intent = detect_intent(command)
     emotion = detect_emotion(command)
     print(f"[🧠] Intent: {intent}, Emotion: {emotion}")
 
-    auto_read = (emotion == "negative")  # 🚀 Auto-read aloud if sad/angry/etc
-
+    # ❌ Short and neutral → skip
     if len(command.split()) < 2 and "?" not in command:
         print("🧠 Too short. Skipping.")
         return False
 
-    if intent not in ["conversation", "unknown"] and emotion == "neutral" and "?" not in command:
+    if intent not in ["conversation", "unknown", "learning"] and emotion == "neutral" and "?" not in command:
         print("🧠 Skipping fallback: No reason to respond.")
         return False
+
+    config = load_config()
+    priority_list = config.get("fallback_priority")
+    auto_converse = config.get("fallback_auto_converse", False)
+    auto_read = (emotion == "negative")  # Read automatically if emotional
 
     set_session_mode(True)
     print("\n🔁 Session mode ON (fallback)")
@@ -128,7 +139,7 @@ def handle_fallback(command: str) -> bool:
                 show_fallback_in_hud(last_fallback_response)
 
                 if auto_read:
-                    human_speak(last_fallback_response)  # 🗣️ auto speak
+                    human_speak(last_fallback_response)
                 elif auto_converse:
                     human_speak(last_fallback_response)
                     resume_listening()
@@ -146,6 +157,7 @@ def handle_fallback(command: str) -> bool:
         set_session_mode(False)
         return False
 
+    # === Follow-up Listening
     start_time = time.time()
     is_reading = auto_read
 
@@ -181,7 +193,7 @@ def handle_fallback(command: str) -> bool:
                 speak("Could you please clarify?")
                 continue
 
-            # Treat as a new query
+            # 🔁 Treat as new query
             return handle_fallback(follow_up)
 
         time.sleep(0.2)
