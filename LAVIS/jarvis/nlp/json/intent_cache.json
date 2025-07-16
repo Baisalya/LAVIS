@@ -143,5 +143,18 @@
   "jacks a": "unknown",
   "you have available": "explorer",
   "but it": "conversation",
-  "indeed dead": "unknown"
+  "indeed dead": "unknown",
+  "hello browser": "command",
+  "what's they weather they lights": "unknown",
+  "on": "command",
+  "hello": "conversation",
+  "pause turn": "command",
+  "lights": "command",
+  "hello music on they": "command",
+  "down music they": "command",
+  "well": "conversation",
+  "tell me yesterday": "command",
+  "until beat me": "unknown",
+  "she she": "unknown",
+  "they cape": "unknown"
 }
