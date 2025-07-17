@@ -29,7 +29,6 @@ class HandControl:
         self.control_hand = "Right"
 
     def get_landmarks(self, frame):
-        """Detect hand landmarks and return list if it matches the control hand."""
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb)
         landmarks = []
@@ -47,7 +46,6 @@ class HandControl:
         return []
 
     def fingers_up(self, lm_list):
-        """Returns a list of booleans for each finger: [thumb, index, middle, ring, pinky]"""
         tips = [4, 8, 12, 16, 20]
         fingers = []
         fingers.append(lm_list[4][0] > lm_list[3][0])  # Thumb
@@ -56,7 +54,6 @@ class HandControl:
         return fingers
 
     def analyze_finger_directions(self, lm_list):
-        """Returns number of fingers pointing up/down"""
         tips = [8, 12, 16, 20]
         up = 0
         down = 0
@@ -70,7 +67,6 @@ class HandControl:
         return up, down
 
     def is_thumb_index_touching(self, lm_list):
-        """Detects if thumb and index are touching (for click/drag)"""
         thumb_tip = lm_list[4]
         index_tip = lm_list[8]
         dist = np.linalg.norm(np.array(thumb_tip) - np.array(index_tip))
@@ -80,6 +76,7 @@ class HandControl:
         cap = cv2.VideoCapture(0)
         cap.set(3, self.cam_width)
         cap.set(4, self.cam_height)
+        cap.set(cv2.CAP_PROP_FPS, 60)
 
         while True:
             ret, frame = cap.read()
@@ -103,9 +100,13 @@ class HandControl:
                 dx = x - self.prev_x
                 dy = y - self.prev_y
 
-                # === Gesture: Move and Horizontal Scroll ===
+                # === Move mouse only when index + middle are up ===
                 if fingers[1] and fingers[2] and not any(fingers[3:]):
-                    pyautogui.moveTo(self.smooth_x, self.smooth_y)
+                    if abs(self.smooth_x - self.prev_x) > 1 or abs(self.smooth_y - self.prev_y) > 1:
+                        pyautogui.moveTo(self.smooth_x, self.smooth_y)
+                        self.prev_x, self.prev_y = self.smooth_x, self.smooth_y
+
+                    # Horizontal scroll with fast hand movement
                     if time.time() - self.last_action_time > 0.4:
                         if dx > self.velocity_threshold:
                             pyautogui.hscroll(30)
@@ -124,26 +125,26 @@ class HandControl:
                     pyautogui.click(button='left')
                     time.sleep(0.2)
 
-                # === Slow Scroll Up ===
+                # === Scroll Up ===
                 elif up_count in [3, 4]:
-                    pyautogui.scroll(30)
+                    pyautogui.scroll(70)
                     time.sleep(0.2)
 
-                # === Slow Scroll Down ===
+                # === Scroll Down ===
                 elif down_count in [3, 4]:
-                    pyautogui.scroll(-30)
+                    pyautogui.scroll(-100)
                     time.sleep(0.2)
+
+                # === Drag (thumb + index touch) ===
+                elif self.is_thumb_index_touching(landmarks):
+                    pyautogui.mouseDown(button='left')
+                    time.sleep(0.3)
+                    pyautogui.mouseUp(button='left')
 
                 # === Double Click ===
                 elif not any(fingers[1:]):
                     pyautogui.doubleClick()
                     time.sleep(0.3)
-
-                # === Drag ===
-                elif self.is_thumb_index_touching(landmarks):
-                    pyautogui.mouseDown(button='left')
-                    time.sleep(0.3)
-                    pyautogui.mouseUp(button='left')
 
                 # === Minimize ===
                 elif fingers[0] and not any(fingers[1:]):
@@ -165,6 +166,7 @@ class HandControl:
                     pyautogui.scroll(-90)
                     self.last_scroll_time = time.time()
 
+                # Update previous index finger position
                 self.prev_x, self.prev_y = x, y
 
             cv2.imshow("Jarvis Hand Control", frame)
