@@ -168,5 +168,10 @@
   "megan": "input_control",
   "on ice": "command",
   "sap": "unknown",
-  "zap": "command"
+  "zap": "command",
+  "i guess i don't have a soft pouch": "conversation",
+  "later": "input_control",
+  "europe": "explorer",
+  "theatre": "explorer",
+  "who are you": "learning"
 }
