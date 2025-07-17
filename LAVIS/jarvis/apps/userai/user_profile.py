@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 from fuzzywuzzy import fuzz
 
+# Load user profile from JSON
 def load_user_profile(path="user_profile.json") -> dict:
     try:
         with open(path, "r") as f:
@@ -10,20 +11,23 @@ def load_user_profile(path="user_profile.json") -> dict:
     except FileNotFoundError:
         return {}
 
+# Extract keywords from question
 def extract_keywords(text: str):
     text = text.lower()
-    return set(re.findall(r"\b(name|age|birthday|dob|creator|created|father|loyal|loyalty|color|favourite|favorite|live|location|hobby|photo|image|picture|purpose|version|yourself|jarvis|who|you|do you do|abilities|what can you do|personality|goal)\b", text))
+    return set(re.findall(r"\b(name|nickname|age|birthday|dob|creator|created|father|loyal|loyalty|color|favourite|favorite|live|location|hobby|photo|image|picture|purpose|version|yourself|jarvis|who|you|do you do|abilities|what can you do|personality|goal|how old|mood|trait|quirk|emotion|feeling|last interaction|recent|command)\b", text))
 
+# Answer user queries intelligently
 def answer_about_user(query: str, profile: dict) -> str:
     query = query.lower()
     keywords = extract_keywords(query)
+    jarvis = profile.get("jarvis_self", {})
+    memory = profile.get("memory", {})
+    traits = profile.get("personality_traits", {})
 
-    # === Jarvis self-awareness ===
-    if any(k in query for k in ["who are you", "what are you", "what can you do", "jarvis", "yourself", "purpose", "creator", "who created you", "version"]):
-        jarvis = profile.get("jarvis_self", {})
+    # === JARVIS Self-Awareness ===
+    if any(k in query for k in ["who are you", "what are you", "jarvis", "yourself", "version", "what can you do"]):
         if not jarvis:
-            return "I am your assistant, but I don't have a self-profile yet."
-
+            return jarvis.get("fallbacks", {}).get("empty_profile", "I don't have that information yet.")
         response = (
             f"I am {jarvis.get('name', 'your assistant')}, version {jarvis.get('version', 'unknown')}.\n"
             f"I was created by {jarvis.get('created_by', 'an unknown creator')}.\n"
@@ -32,44 +36,60 @@ def answer_about_user(query: str, profile: dict) -> str:
         )
         abilities = jarvis.get("abilities", [])
         if abilities:
-            response += "\nI am capable of: " + ", ".join(abilities) + "."
+            response += "\nHere’s what I can do: " + ", ".join(abilities) + "."
         return response
 
-    # === Personal details about the user ===
+    # === User Personal Info ===
     if "name" in keywords:
         return f"Your name is {profile.get('name', 'not set')}."
-    
-    if "age" in keywords or "birthday" in keywords or "dob" in keywords:
+    if "nickname" in keywords:
+        return f"Your nickname is {profile.get('nick_name', 'not set')}."
+    if "age" in keywords or "birthday" in keywords or "dob" in keywords or "how old" in query:
         dob = profile.get("dob")
         if dob:
             birth_year = int(dob.split("-")[0])
             age = datetime.now().year - birth_year
-            return f"You were born in {dob}, and you are approximately {age} years old."
+            return f"You were born on {dob}, so you're about {age} years old."
         return "I couldn't determine your age."
-
     if "creator" in keywords or "created" in keywords or "father" in keywords:
         return f"My creator is {profile.get('creator', 'unknown')}."
-
-    if "loyal" in keywords or "loyalty" in keywords:
+    if "loyal" in keywords:
         return f"I am loyal to {profile.get('loyal_to', 'my creator')}."
-
     if "color" in keywords or "favourite" in keywords or "favorite" in keywords:
         return f"Your favorite color is {profile.get('favorite_color', 'unknown')}."
-
     if "hobby" in keywords:
         hobbies = profile.get("hobbies", [])
-        return f"Your hobbies include {', '.join(hobbies)}."
-
+        return f"Your hobbies include: {', '.join(hobbies)}."
     if "live" in keywords or "location" in keywords:
         return f"You live in {profile.get('location', 'an unknown location')}."
-
     if "photo" in keywords or "image" in keywords or "picture" in keywords:
         return f"Your photo is stored at {profile.get('photo', 'not available')}."
-
     if "purpose" in keywords or "do you do" in query:
         return profile.get("purpose", "I assist you, but my purpose is not defined.")
 
-    # === Fuzzy fallback: best-effort semantic match ===
+    # === Advanced Memory/Personality ===
+    if "trait" in keywords or "personality" in keywords:
+        return f"Your core traits: {', '.join(traits.get('core', []))}."
+    if "quirk" in keywords:
+        return f"Your quirks: {', '.join(traits.get('quirks', []))}."
+    if "mood" in keywords or "emotion" in keywords or "feeling" in keywords:
+        return f"Your current mood is: {traits.get('mood', 'not available')}."
+    if "last interaction" in query or "recent" in keywords or "command" in keywords:
+        cmds = memory.get("recent_commands", [])
+        if cmds:
+            return f"Your last command was: '{cmds[-1]}'"
+        return "No recent commands found."
+
+    # === Jarvis-specific goals or emotion engine ===
+    if "goal" in keywords:
+        return jarvis.get("goal", "My goal is to assist you.")
+    if "abilities" in keywords:
+        return "I'm capable of: " + ", ".join(jarvis.get("abilities", [])) + "."
+    if "emotion engine" in query:
+        engine = jarvis.get("emotion_engine", {})
+        return f"My emotion engine is {'active' if engine.get('active') else 'inactive'}, state: {engine.get('default_state', 'neutral')}."
+
+    # === Fuzzy fallback: semantic best match ===
     best_score = 0
     best_key = None
     for key in profile:
@@ -82,4 +102,4 @@ def answer_about_user(query: str, profile: dict) -> str:
     if best_score > 70:
         return f"{best_key.capitalize()}: {profile[best_key]}"
 
-    return None  # Let fallback handle if nothing matched
+    return jarvis.get("fallbacks", {}).get("unknown_question", "I'm not sure how to answer that yet, but I'm learning.")
