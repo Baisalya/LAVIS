@@ -3,7 +3,7 @@ import numpy as np
 import mediapipe as mp
 import pyautogui
 import time
-from LAVIS.hud_display import show_hud_reply
+#from LAVIS.hud_display import #show_hud_reply
 
 pyautogui.FAILSAFE = False
 
@@ -39,9 +39,9 @@ class HandControl:
     def fingers_up(self, lm_list):
         tips = [4, 8, 12, 16, 20]
         fingers = []
-        fingers.append(lm_list[4][0] > lm_list[3][0])
+        fingers.append(lm_list[4][0] > lm_list[3][0])  # Thumb
         for i in range(1, 5):
-            fingers.append(lm_list[tips[i]][1] < lm_list[tips[i] - 2][1])
+            fingers.append(lm_list[tips[i]][1] < lm_list[tips[i] - 2][1])  # Other fingers
         return fingers
 
     def analyze_finger_directions(self, lm_list):
@@ -68,7 +68,7 @@ class HandControl:
         cap.set(3, self.cam_width)
         cap.set(4, self.cam_height)
 
-        show_hud_reply("🖐️ Hand control mode activated. Press ESC to exit.")
+        #show_hud_reply("🖐️ Hand control mode activated. Press ESC to exit.")
 
         while True:
             ret, frame = cap.read()
@@ -87,61 +87,78 @@ class HandControl:
                 self.smooth_x = self.smooth_x + (screen_x - self.smooth_x) * self.smoothing
                 self.smooth_y = self.smooth_y + (screen_y - self.smooth_y) * self.smoothing
 
+                # Gesture: Index + Middle finger for move and horizontal scroll
                 if fingers[1] and fingers[2] and not any(fingers[3:]):
                     pyautogui.moveTo(self.smooth_x, self.smooth_y)
                     dx = x - self.prev_x
                     if time.time() - self.last_action_time > 0.4:
                         if dx > self.velocity_threshold:
                             pyautogui.hscroll(30)
-                            show_hud_reply("➡️ Scroll Right")
+                            #show_hud_reply("➡️ Scroll Right")
                             self.last_action_time = time.time()
                         elif dx < -self.velocity_threshold:
                             pyautogui.hscroll(-30)
-                            show_hud_reply("⬅️ Scroll Left")
+                            #show_hud_reply("⬅️ Scroll Left")
                             self.last_action_time = time.time()
                     self.prev_x, self.prev_y = x, y
 
                 elif fingers[2] and not fingers[1] and not any(fingers[3:]):
                     pyautogui.click(button='right')
-                    show_hud_reply("🖱️ Right Click")
+                    #show_hud_reply("🖱️ Right Click")
                     time.sleep(0.2)
 
                 elif fingers[1] and not fingers[2] and not any(fingers[3:]):
                     pyautogui.click(button='left')
-                    show_hud_reply("🖱️ Left Click")
+                    #show_hud_reply("🖱️ Left Click")
                     time.sleep(0.2)
 
                 elif up_count in [3, 4]:
                     pyautogui.scroll(30)
-                    show_hud_reply("⬆️ Scrolling Up")
+                    #show_hud_reply("⬆️ Scrolling Up")
                     time.sleep(0.2)
 
                 elif down_count in [3, 4]:
                     pyautogui.scroll(-30)
-                    show_hud_reply("⬇️ Scrolling Down")
+                    #show_hud_reply("⬇️ Scrolling Down")
                     time.sleep(0.2)
 
                 elif not any(fingers[1:]):
                     pyautogui.doubleClick()
-                    show_hud_reply("🖱️ Double Click")
+                    #show_hud_reply("🖱️ Double Click")
                     time.sleep(0.3)
 
                 elif self.is_thumb_index_touching(landmarks):
                     pyautogui.mouseDown(button='left')
-                    show_hud_reply("✋ Dragging...")
+                    #show_hud_reply("✋ Dragging...")
                     time.sleep(0.3)
                     pyautogui.mouseUp(button='left')
-                    show_hud_reply("🖱️ Drag Complete")
+                    #show_hud_reply("🖱️ Drag Complete")
 
                 elif fingers[0] and not any(fingers[1:]):
                     pyautogui.hotkey('win', 'down')
-                    show_hud_reply("🧊 Minimize Window")
+                    #show_hud_reply("🧊 Minimize Window")
                     time.sleep(0.3)
 
                 elif all(fingers):
                     pyautogui.hotkey('win', 'up')
-                    show_hud_reply("🪟 Maximize/Restore Window")
+                    #show_hud_reply("🪟 Maximize/Restore Window")
                     time.sleep(0.3)
+
+                # 🔥 New Gesture 1: Backhand Scroll Down
+                if all(fingers) and down_count >= 4:
+                    pyautogui.scroll(-90)  # Fast scroll down
+                    #show_hud_reply("💨 Fast Scroll Down (Backhand Detected)")
+                    time.sleep(0.15)
+
+                # 🔥 New Gesture 2: Upward Swipe to Scroll Up
+                curr_time = time.time()
+                dy = self.prev_y - y
+                if fingers[1] and all(fingers[2:]) and dy > 60 and (curr_time - self.last_action_time) > 0.5:
+                    pyautogui.scroll(90)  # Fast scroll up
+                    #show_hud_reply("👆 Scroll Up (Hand Swipe Detected)")
+                    self.last_action_time = curr_time
+
+                self.prev_x, self.prev_y = x, y
 
             cv2.imshow("Jarvis Hand Control", frame)
             if cv2.waitKey(1) == 27:
@@ -149,3 +166,5 @@ class HandControl:
 
         cap.release()
         cv2.destroyAllWindows()
+if __name__=='__main__':
+    HandControl().run()
