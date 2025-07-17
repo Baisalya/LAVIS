@@ -2,14 +2,31 @@ import json
 import re
 from datetime import datetime
 from fuzzywuzzy import fuzz
-
+import os
 # Load user profile from JSON
-def load_user_profile(path="user_profile.json") -> dict:
+# ✅ Load user profile from JSON
+import os
+import json
+
+def load_user_profile(filename="user_profile.json") -> dict:
+    # Absolute path of current script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Construct full path to the profile file
+    profile_path = os.path.join(script_dir, filename)
+
+    # Try loading the profile
     try:
-        with open(path, "r") as f:
-            return json.load(f)
+        with open(profile_path, "r", encoding="utf-8") as f:
+            profile = json.load(f)
+            print(f"✅ Loaded profile from {profile_path}")
+            return profile
     except FileNotFoundError:
-        return {}
+        print(f"❌ Profile file not found at {profile_path}")
+    except json.JSONDecodeError as e:
+        print(f"❌ Error decoding JSON: {e}")
+
+    return {}
 
 # Extract keywords from question
 def extract_keywords(text: str):
@@ -17,9 +34,17 @@ def extract_keywords(text: str):
     return set(re.findall(r"\b(name|nickname|age|birthday|dob|creator|created|father|loyal|loyalty|color|favourite|favorite|live|location|hobby|photo|image|picture|purpose|version|yourself|jarvis|who|you|do you do|abilities|what can you do|personality|goal|how old|mood|trait|quirk|emotion|feeling|last interaction|recent|command)\b", text))
 
 # Answer user queries intelligently
-def answer_about_user(query: str, profile: dict) -> str:
+import re
+from datetime import datetime
+from fuzzywuzzy import fuzz
+
+def answer_about_user(query: str, profile: dict) -> str | None:
     query = query.lower()
-    keywords = extract_keywords(query)
+    keywords = set(re.findall(
+        r"\b(name|nickname|age|birthday|dob|creator|created|father|who made you|who created you|made you|loyal|loyalty|color|favourite|favorite|live|location|hobby|photo|image|picture|purpose|version|yourself|jarvis|who|you|do you do|abilities|what can you do|personality|goal|how old|mood|trait|quirk|emotion|feeling|last interaction|recent|command)\b",
+        query
+    ))
+
     jarvis = profile.get("jarvis_self", {})
     memory = profile.get("memory", {})
     traits = profile.get("personality_traits", {})
@@ -27,7 +52,7 @@ def answer_about_user(query: str, profile: dict) -> str:
     # === JARVIS Self-Awareness ===
     if any(k in query for k in ["who are you", "what are you", "jarvis", "yourself", "version", "what can you do"]):
         if not jarvis:
-            return jarvis.get("fallbacks", {}).get("empty_profile", "I don't have that information yet.")
+            return None
         response = (
             f"I am {jarvis.get('name', 'your assistant')}, version {jarvis.get('version', 'unknown')}.\n"
             f"I was created by {jarvis.get('created_by', 'an unknown creator')}.\n"
@@ -51,8 +76,18 @@ def answer_about_user(query: str, profile: dict) -> str:
             age = datetime.now().year - birth_year
             return f"You were born on {dob}, so you're about {age} years old."
         return "I couldn't determine your age."
-    if "creator" in keywords or "created" in keywords or "father" in keywords:
-        return f"My creator is {profile.get('creator', 'unknown')}."
+    
+    # ✅ FIXED: Handle creator question properly
+    if "creator" in keywords or "created" in keywords or "father" in keywords or "who made you" in query or "who created you" in query or "made you" in query:
+        creator_name = (
+            jarvis.get("created_by") 
+            or profile.get("creator") 
+            or profile.get("name")
+        )
+        if creator_name:
+            return f"My creator is {creator_name}."
+        return "I don't know who created me."
+
     if "loyal" in keywords:
         return f"I am loyal to {profile.get('loyal_to', 'my creator')}."
     if "color" in keywords or "favourite" in keywords or "favorite" in keywords:
@@ -102,4 +137,6 @@ def answer_about_user(query: str, profile: dict) -> str:
     if best_score > 70:
         return f"{best_key.capitalize()}: {profile[best_key]}"
 
-    return jarvis.get("fallbacks", {}).get("unknown_question", "I'm not sure how to answer that yet, but I'm learning.")
+    # No confident match — signal fallback to continue
+    print("ℹ️ No matching profile data found.")
+    return None

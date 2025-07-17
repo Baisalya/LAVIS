@@ -53,67 +53,60 @@ def search_duckduckgo(query):
     except:
         return None
 
-
-def handle_fallback(command: str) -> bool:
+def handle_fallback(command: str) -> str:
     global last_fallback_response
-    from LAVIS.jarvis.commands.commands import handle_command  # Prevent circular import
+    from LAVIS.jarvis.commands.commands import handle_command
+    from LAVIS.jarvis.voice.speaker import human_speak, speak, stop_speaking
+    from LAVIS.hud_display import show_fallback_in_hud
+    from LAVIS.jarvis.voice.recognizer import resume_listening, set_session_mode
+    from LAVIS.jarvis.nlp.intent_detector import is_personal_query
 
-    # ✅ Load profile first
     profile = load_user_profile()
-    personal_answer = answer_about_user(command, profile)
-    if personal_answer:
-        print("✅ Personal profile response triggered.")
-        last_fallback_response = personal_answer
-        show_fallback_in_hud(personal_answer)
-        human_speak(personal_answer)  # Auto read it aloud
-        return True
 
-    # 🧠 Detect intent + emotion
+    # 🧠 STEP 1: Route Personal Queries to Profile
+    if is_personal_query(command):
+        print("🔁 Routing to: Profile")
+        personal_answer = answer_about_user(command, profile)
+        if personal_answer:
+            last_fallback_response = personal_answer
+            show_fallback_in_hud(personal_answer)
+            human_speak(personal_answer)
+            resume_listening()
+            set_session_mode(False)
+            return personal_answer
+        else:
+            print("⚠️ No matching personal answer found. Will try fallback.")
+
+    # 🧠 STEP 2: External Fallback Sources
     intent = detect_intent(command)
     emotion = detect_emotion(command)
     print(f"[🧠] Intent: {intent}, Emotion: {emotion}")
 
-    # ❌ Short and neutral → skip
-    if len(command.split()) < 2 and "?" not in command:
-        print("🧠 Too short. Skipping.")
-        return False
-
-    if intent not in ["conversation", "unknown", "learning"] and emotion == "neutral" and "?" not in command:
-        print("🧠 Skipping fallback: No reason to respond.")
-        return False
+    if len(command.strip().split()) < 2 and "?" not in command:
+        return "I need a bit more detail to help you."
 
     config = load_config()
-    priority_list = config.get("fallback_priority")
+    priority_list = config.get("fallback_priority", [])
     auto_converse = config.get("fallback_auto_converse", False)
-    auto_read = (emotion == "negative")  # Read automatically if emotional
+    auto_read = emotion == "negative"
 
     set_session_mode(True)
-    print("\n🔁 Session mode ON (fallback)")
+    print("🧠 Session mode: ON")
 
     BAD_RESPONSES = [
-        "i apologize", "i'm not sure", "please provide",
-        "no text for me to read", "i don’t know", "i don't have",
-        "i'm sorry", "as an ai", "i am not able", "not found"
+        "i apologize", "i'm not sure", "please provide", "no text", "i don’t know",
+        "i'm sorry", "as an ai", "not found", "i cannot", "i can't", "i don’t", "hoBIES"
     ]
-
-    response = None
 
     for method in priority_list:
         try:
+            print(f"🔎 Trying fallback source: {method}")
             if method == "ollama":
-                prompt = (
-                    f"You are a warm, supportive assistant. Always respond if the user shows emotion or speaks like a friend.\n\n"
-                    f"User said: \"{command}\"\n\n"
-                    f"Give an empathetic, comforting, or friendly response."
-                )
+                prompt = f"User asked: {command}\nRespond clearly."
                 response = ask_ollama(prompt)
 
             elif method == "groq":
-                prompt = (
-                    f"You're a caring AI companion. The user just said:\n\n"
-                    f"\"{command}\"\n\n"
-                    f"Respond warmly like a friend would. Comfort them or offer something thoughtful."
-                )
+                prompt = f"The user said:\n{command}\nRespond as a helpful assistant."
                 response = ask_groq(prompt)
 
             elif method == "wikipedia" and is_connected():
@@ -125,79 +118,27 @@ def handle_fallback(command: str) -> bool:
             elif method == "chatbot":
                 response = str(chatbot.get_response(command))
 
-            if response and response.strip().lower() == "skip":
-                print(f"🤖 {method} chose not to reply (SKIP).")
-                continue
-
-            if response and len(response.strip()) > 5:
-                cleaned = response.strip().lower()
+            if response:
+                cleaned = response.lower().strip()
                 if any(bad in cleaned for bad in BAD_RESPONSES):
-                    print(f"⚠️ Skipping bad fallback response from {method}: {response}")
+                    print(f"⚠️ Skipped bad response from {method}: {response}")
                     continue
 
                 last_fallback_response = response
-                show_fallback_in_hud(last_fallback_response)
-
-                if auto_read:
-                    human_speak(last_fallback_response)
-                elif auto_converse:
-                    human_speak(last_fallback_response)
+                show_fallback_in_hud(response)
+                if auto_read or auto_converse:
+                    human_speak(response)
+                if auto_converse:
                     resume_listening()
                     set_session_mode(False)
-                    return True
-
-                break
+                return response
 
         except Exception as e:
-            print(f"⚠️ {method} failed: {e}")
+            print(f"❌ {method} failed: {e}")
+            continue
 
-    if not last_fallback_response:
-        speak("Sorry, I couldn’t find anything helpful.")
-        resume_listening()
-        set_session_mode(False)
-        return False
-
-    # === Follow-up Listening
-    start_time = time.time()
-    is_reading = auto_read
-
-    while time.time() - start_time < 60:
-        if not command_queue.empty():
-            follow_up = command_queue.get().strip().lower()
-            print("🎧 Follow-up heard:", follow_up)
-
-            if is_reading:
-                if follow_up in ["stop", "pause", "ok stop", "don't read", "enough"]:
-                    stop_speaking()
-                    speak("Okay, I’ve paused the answer. You can ask more.")
-                    is_reading = False
-                else:
-                    print("🔇 Ignored input during reading.")
-                continue
-
-            if follow_up in ["read it", "read the answer", "speak it", "tell me"]:
-                is_reading = True
-                human_speak(last_fallback_response)
-                continue
-
-            elif follow_up in ["exit", "close", "thank you"]:
-                speak("Okay, closing the session.")
-                resume_listening()
-                set_session_mode(False)
-                return True
-
-            elif handle_command(follow_up):
-                continue
-
-            elif len(follow_up.split()) < 3:
-                speak("Could you please clarify?")
-                continue
-
-            # 🔁 Treat as new query
-            return handle_fallback(follow_up)
-
-        time.sleep(0.2)
-
+    speak("Sorry, I couldn’t find anything useful.")
     resume_listening()
     set_session_mode(False)
-    return True
+    return "Sorry, I couldn’t find anything useful."
+# Detect if the question should be answered from profile

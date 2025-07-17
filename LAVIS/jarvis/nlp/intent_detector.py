@@ -110,3 +110,13 @@ def detect_intent(raw_text: str) -> str:
     save_cache(cache)
 
     return intent
+# LAVIS/jarvis/nlp/intent_detector.py
+
+def is_personal_query(text: str) -> bool:
+    personal_keywords = [
+        "my name", "nickname", "how old", "birthday", "dob", "creator", "father",
+        "loyal", "color", "favourite", "favorite", "live", "location", "hobby", "photo",
+        "image", "purpose", "trait", "quirk", "mood", "emotion", "goal", "abilities",
+        "last interaction", "recent command", "what do you know about me"
+    ]
+    return any(k in text.lower() for k in personal_keywords)
