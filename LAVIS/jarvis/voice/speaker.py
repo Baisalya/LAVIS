@@ -10,6 +10,8 @@ from LAVIS.jarvis.network import is_connected
 import random
 import time
 
+from LAVIS.jarvis.voice.recognizer import set_last_spoken_text  # 👈 Sync with recognizer
+
 # === Globals ===
 stop_speaking = False
 voice_name = "en-US-AriaNeural"
@@ -18,16 +20,16 @@ engine.setProperty('rate', 160)
 engine.setProperty('volume', 1.0)
 engine.setProperty('voice', engine.getProperty('voices')[1].id)
 
-
 def speak_offline(text):
     print("🗣️ (offline)", text)
+    set_last_spoken_text(text)
     engine.say(text)
     engine.runAndWait()
-
 
 def speak(text):
     global stop_speaking
     stop_speaking = False
+    set_last_spoken_text(text)
 
     if not is_connected():
         speak_offline(text)
@@ -50,11 +52,10 @@ def speak(text):
                 print("🛑 Interrupted before playback.")
                 return
 
-            print("🗣️", text)
+            print("[TTS] Speaking, recognizer paused.")
             buffer.seek(0)
             audio = AudioSegment.from_file(buffer, format="mp3")
 
-            # ✅ Play entire audio at once for smoothness
             if not stop_speaking:
                 play(audio)
 
@@ -90,8 +91,6 @@ def human_speak(answer):
 
         speak(filler)
         time.sleep(1.5)
-
-        # ✅ Reset stop_speaking before actual answer
         stop_speaking = False
 
         if not answer or len(answer.strip()) < 5:
@@ -100,3 +99,4 @@ def human_speak(answer):
             speak(answer.strip())
 
     threading.Thread(target=run_human_speak).start()
+    

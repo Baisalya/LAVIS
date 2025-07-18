@@ -242,5 +242,7 @@
   "but this time miss": "conversation",
   "time in": "input_control",
   "what each time": "conversation",
-  "edit it": "input_control"
+  "edit it": "input_control",
+  "activate master candle": "command",
+  "ten rule": "command"
 }
