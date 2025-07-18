@@ -1,5 +1,6 @@
 import os, re, time, logging, threading, datetime
 from fuzzywuzzy import fuzz
+import random
 
 from playsound import playsound
 
@@ -53,7 +54,7 @@ class LavisCore:
     def check_wake_phrase(self, text):
         text = text.lower().strip()
 
-        if re.search(r"\b(hello|hi)\s+(jarvis|jarvish|gervais)\b", text):
+        if re.search(r"\b(hello|hi)\s+(jarvis|jarvish|gervais)\b", text) or fuzz.ratio(text, WAKE_UP_PHRASE) > 85:
             if self.session_state == "sleep":
                 self.session_state = "normal"
                 update_hud_status("Online")
@@ -68,17 +69,14 @@ class LavisCore:
                     greeting = self.crush.random_late_night_greeting()
                 self.hud_speak(f"{greeting} Welcome back!")
             else:
-                self.hud_speak(self.crush.random_girlish_greeting())
-            return True
-
-        elif fuzz.ratio(text, WAKE_UP_PHRASE) > 85:
-            if self.session_state == "sleep":
-                self.session_state = "normal"
-                update_hud_status("Online")
-                greeting = self.crush.random_girlish_greeting()
-                self.hud_speak(greeting)
-            else:
-                self.hud_speak(f"Hello again, {USER_NAME}! 💡")
+                responses = [
+                    "Yes? I'm right here.",
+                    "You called me?",
+                    "Standing by!",
+                    f"How can I help, {USER_NAME}?",
+                    "Reporting for duty!"
+                ]
+                self.hud_speak(random.choice(responses))
             return True
 
         elif re.search(r"\b(jarvis\s+)?(sleep|go to sleep|shutdown|rest)\b", text):
@@ -98,6 +96,11 @@ class LavisCore:
             return
 
         if self.session_state == "sleep":
+            return
+
+        # Enforce minimum input length unless it's a question
+        if len(input_text.strip().split()) < 2 and "?" not in input_text:
+            show_hud_reply("Please say a full sentence.")
             return
 
         command = re.sub(rf"\b{WAKE_WORD}\b", "", input_text, flags=re.IGNORECASE).strip() or input_text
@@ -198,10 +201,6 @@ class LavisCore:
                 return
 
         elif intent == "conversation":
-            if len(command.strip().split()) < 3:
-                show_hud_reply("Please say a full sentence.")
-                return
-
             show_hud_reply("Let me think about that...")
 
             def run_fallback():
@@ -209,17 +208,8 @@ class LavisCore:
                 self.session_state = "normal"
                 if isinstance(response, str) and response.strip():
                     self.hud_controller.update(response, category="reply", typing=True)
-                    config = load_config()
-                    if not config.get("fallback_auto_converse", False) and detect_emotion(response) != "negative":
-                        speak(response)
-                else:
-                    self.hud_controller.update("Sorry, I couldn't find a response.", category="reply", typing=True)
 
             threading.Thread(target=run_fallback, daemon=True).start()
-            return
-
-        if len(command.strip().split()) < 2:
-            show_hud_reply("I need a complete sentence.")
             return
 
         show_hud_reply("Trying to find an answer...")

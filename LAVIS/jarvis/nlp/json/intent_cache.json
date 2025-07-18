@@ -233,5 +233,14 @@
   "thanks": "conversation",
   "my age": "input_control",
   "aids": "learning",
-  "my name is": "input_control"
+  "my name is": "input_control",
+  "master control activate": "input_control",
+  "can't control active": "input_control",
+  "did plotter demo": "explorer",
+  "food": "explorer",
+  "a a a plus plus": "input_control",
+  "but this time miss": "conversation",
+  "time in": "input_control",
+  "what each time": "conversation",
+  "edit it": "input_control"
 }
