@@ -1,13 +1,10 @@
 # sci_fi_hud.py
-import os
 from datetime import datetime
-
 from kivy.uix.floatlayout import FloatLayout
 from kivy.lang import Builder
 from kivy.clock import Clock
 from kivy.properties import StringProperty
 
-# Custom Widgets
 from .radar import RadarWidget
 from .grid_overlay import GridOverlay
 from .movinghorizontal import MovingHorizontalLinesOverlay
@@ -18,18 +15,18 @@ from ..components.hud_text_overlay import HUDTextOverlay
 from ..components.hud_controller import HUDController
 from ..components.mic_bar import MicVolumeBar
 from ..components.controller.mic_bar_controller import MicBarController
+from LAVIS.utils.hud_utils import set_hud_controller  # ✅ import fixed setter
 
-# Load KV layouts
+# Load .kv files
 Builder.load_file("jarvis_hud/kv/sci_fi.kv")
-Builder.load_file("jarvis_hud/kv/mic_bar.kv")  # ✅ Load separate mic bar KV
+Builder.load_file("jarvis_hud/kv/mic_bar.kv")
 
 class HUDInterface(FloatLayout):
-    system_status = StringProperty("sleep")         # System state label
-    hud_log_console = StringProperty("")            # ✅ Live console log display
+    system_status = StringProperty("sleep")
+    hud_log_console = StringProperty("")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-
         # === Layered HUD Elements ===
         self.grid_overlay = GridOverlay()
         self.add_widget(self.grid_overlay)
@@ -40,64 +37,52 @@ class HUDInterface(FloatLayout):
         self.fog_overlay = ParticleFogOverlay()
         self.add_widget(self.fog_overlay)
 
-        self.core = JarvisCore(
-            size_hint=(None, None),
-            size=(500, 500),
-            pos_hint={"center_x": 0.5, "center_y": 0.5}
-        )
+        self.core = JarvisCore(size_hint=(None, None), size=(500, 500),
+                               pos_hint={"center_x": 0.5, "center_y": 0.5})
         self.add_widget(self.core)
 
-        self.side_glow = SideGlowOverlay(
-            left_color=[1, 0, 0, 0.15],
-            right_color=[0, 1, 1, 0.15],
-        )
+        self.side_glow = SideGlowOverlay(left_color=[1, 0, 0, 0.15],
+                                         right_color=[0, 1, 1, 0.15])
         self.add_widget(self.side_glow)
 
         self.text_overlay = HUDTextOverlay()
         self.add_widget(self.text_overlay)
 
         self.hud_controller = HUDController(self)
-
-        # === Mic Volume Bar (from mic_bar.kv)
+        set_hud_controller(self.hud_controller)  # ✅ SET controller globally
+ # === Mic Volume Bar (from mic_bar.kv)
         self.mic_bar = MicVolumeBar()
-        self.add_widget(self.mic_bar)  # ✅ Add last so it stays on top
+        self.add_widget(self.mic_bar)  # ✅ Display mic bar on top
 
         self.mic_controller = MicBarController(self)
-
         # Optional live clock updater
         Clock.schedule_interval(self.update_time, 1)
 
     def update_mic_level(self, rms):
         level = min(100, int(rms / 3))
-        print(f"[MicBar] Updating level: {level}")
-        if hasattr(self, 'mic_bar') and self.mic_bar:
-            self.mic_bar.level = level
+        print(f"[HUD] Mic Bar Level = {level}")
+        self.mic_bar.level = level
 
     def update_status(self, new_status):
-        """Update status label text."""
         self.system_status = new_status
 
     def update_text(self, message: str, category="info", typing=True):
-        """Display reply/prompt on the HUD."""
         if self.hud_controller:
             self.hud_controller.update(message, category, typing)
 
     def append_console_log(self, message: str):
-        """Append message to live log with scroll."""
         logs = self.hud_log_console.splitlines()
         logs.append(message)
-        self.hud_log_console = "\n".join(logs[-30:])  # Keep last 30 lines
+        self.hud_log_console = "\n".join(logs[-30:])
         Clock.schedule_once(self.scroll_console_to_bottom, 0.01)
 
     def scroll_console_to_bottom(self, *args):
-        """Auto-scroll to the bottom of log display."""
         try:
             self.ids.console_scroll.scroll_y = 0
         except Exception as e:
             print("[LogScrollError]", e)
 
     def update_time(self, dt):
-        """Update date/time labels via KV IDs."""
         now = datetime.now()
         time_str = now.strftime("%I:%M:%S %p")
         date_str = now.strftime("%Y.%m.%d")

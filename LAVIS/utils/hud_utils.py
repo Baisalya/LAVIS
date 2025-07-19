@@ -1,10 +1,10 @@
 # LAVIS/utils/hud_utils.py
-from jarvis_hud.main import hud_interface
-from jarvis_hud.components.hud_controller import HUDController
-import os
-os.environ["TORIO_DISABLE_EXTENSION"] = "1"
+
+_hud_controller_instance = None  # global cache
+
+def set_hud_controller(controller):
+    global _hud_controller_instance
+    _hud_controller_instance = controller
 
 def get_hud_controller():
-    if hud_interface is not None:
-        return HUDController(hud_interface)
-    return None
+    return _hud_controller_instance
