@@ -78,10 +78,6 @@ def stop_speech():
 
 def human_speak(answer):
     filler = random.choice([
-        "Let me check that...",
-        "Give me a second...",
-        "Thinking...",
-        "Here's what I found:",
         "Got it..."
     ])
 
@@ -99,4 +95,3 @@ def human_speak(answer):
             speak(answer.strip())
 
     threading.Thread(target=run_human_speak).start()
-    

@@ -38,3 +38,5 @@ def append_hud_console(message: str):
         hud_interface.append_console_log(message)
     else:
         print(f"[HUD CONSOLE] Skipped: {message}")
+if __name__ == "__main__":
+    SciFiApp().run()

@@ -1,3 +1,4 @@
+# sci_fi_hud.py
 import os
 from datetime import datetime
 
@@ -15,10 +16,12 @@ from .fogoverlay import ParticleFogOverlay
 from .SideGlowOverlay import SideGlowOverlay
 from ..components.hud_text_overlay import HUDTextOverlay
 from ..components.hud_controller import HUDController
+from ..components.mic_bar import MicVolumeBar
+from ..components.controller.mic_bar_controller import MicBarController
 
-# Load KV layout
+# Load KV layouts
 Builder.load_file("jarvis_hud/kv/sci_fi.kv")
-
+Builder.load_file("jarvis_hud/kv/mic_bar.kv")  # ✅ Load separate mic bar KV
 
 class HUDInterface(FloatLayout):
     system_status = StringProperty("sleep")         # System state label
@@ -55,8 +58,20 @@ class HUDInterface(FloatLayout):
 
         self.hud_controller = HUDController(self)
 
+        # === Mic Volume Bar (from mic_bar.kv)
+        self.mic_bar = MicVolumeBar()
+        self.add_widget(self.mic_bar)  # ✅ Add last so it stays on top
+
+        self.mic_controller = MicBarController(self)
+
         # Optional live clock updater
         Clock.schedule_interval(self.update_time, 1)
+
+    def update_mic_level(self, rms):
+        level = min(100, int(rms / 3))
+        print(f"[MicBar] Updating level: {level}")
+        if hasattr(self, 'mic_bar') and self.mic_bar:
+            self.mic_bar.level = level
 
     def update_status(self, new_status):
         """Update status label text."""
