@@ -174,7 +174,7 @@ def _vosk_listen_loop():
             print(f"🎙️ Mic: {bar:<20} ({rms_level})", end="\r")
             if controller and hasattr(controller, "hud") and hasattr(controller.hud, "mic_controller"):
                 controller.hud.mic_controller.update_level(rms_level)
-            print(f"📢 Mic RMS: {rms_level}")
+            #print(f"📢 Mic RMS: {rms_level}")
 
             now = time.time()
 

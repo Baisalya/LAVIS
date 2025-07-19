@@ -22,9 +22,9 @@ from LAVIS.jarvis.commands.explorer import handle_explorer
 from LAVIS.jarvis.commands.input_control import handle_input_control
 from LAVIS.jarvis.apps.userai.lavish_messages import AssistantCrushMessages
 
-WAKE_WORD = "jarvis"
-WAKE_UP_PHRASE = "hello jarvis"
-SLEEP_PHRASE = "jarvis sleep"
+WAKE_WORD = "Lavish"
+WAKE_UP_PHRASE = "hello Lavish"
+SLEEP_PHRASE = "Lavish sleep"
 AUDIO_STARTUP = os.path.abspath("LAVIS/lavis_start.mp3")
 USER_NAME = "Lala"
 
@@ -54,17 +54,17 @@ class LavisCore:
     def check_wake_phrase(self, text):
         text = text.lower().strip()
 
-        if re.search(r"\b(hello|hi)\s+(jarvis|jarvish|gervais)\b", text) or fuzz.ratio(text, WAKE_UP_PHRASE) > 85:
+        if re.search(r"\b(hello|hi)\s+(Lavis|Lavish|levies)\b", text) or fuzz.ratio(text, WAKE_UP_PHRASE) > 85:
             if self.session_state == "sleep":
                 self.session_state = "normal"
                 update_hud_status("Online")
                 current_hour = datetime.datetime.now().hour
                 if 5 <= current_hour < 12:
-                    greeting = f"Good morning, {USER_NAME} ☀️"
+                    greeting = f"Good morning, {USER_NAME} "
                 elif 12 <= current_hour < 17:
-                    greeting = f"Good afternoon, {USER_NAME} 🌞"
+                    greeting = f"Good afternoon, {USER_NAME} "
                 elif 17 <= current_hour < 21:
-                    greeting = f"Good evening, {USER_NAME} 🌆"
+                    greeting = f"Good evening, {USER_NAME} "
                 else:
                     greeting = self.crush.random_late_night_greeting()
                 self.hud_speak(f"{greeting} Welcome back!")

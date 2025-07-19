@@ -60,7 +60,7 @@ class HUDInterface(FloatLayout):
 
     def update_mic_level(self, rms):
         level = min(100, int(rms / 3))
-        print(f"[HUD] Mic Bar Level = {level}")
+       # print(f"[HUD] Mic Bar Level = {level}")
         self.mic_bar.level = level
 
     def update_status(self, new_status):
