@@ -1,4 +1,4 @@
-# speaker.py (TTS Manager)
+# speaker.py (TTS Manager - Optimized)
 import asyncio
 import threading
 import io
@@ -10,21 +10,31 @@ from LAVIS.jarvis.network import is_connected
 import random
 import time
 
-from LAVIS.jarvis.voice.recognizer import set_last_spoken_text  # 👈 Sync with recognizer
+from LAVIS.jarvis.voice.recognizer import set_last_spoken_text
 
 # === Globals ===
 stop_speaking = False
 voice_name = "en-US-AriaNeural"
 engine = pyttsx3.init()
+
+# Configure offline engine
 engine.setProperty('rate', 160)
 engine.setProperty('volume', 1.0)
-engine.setProperty('voice', engine.getProperty('voices')[1].id)
+try:
+    voices = engine.getProperty('voices')
+    if len(voices) > 1:
+        engine.setProperty('voice', voices[1].id)
+except Exception as e:
+    print(f"[TTS] Voice setup error: {e}")
 
 def speak_offline(text):
-    print("🗣️ (offline)", text)
-    set_last_spoken_text(text)
-    engine.say(text)
-    engine.runAndWait()
+    try:
+        print("🗣️ (offline)", text)
+        set_last_spoken_text(text)
+        engine.say(text)
+        engine.runAndWait()
+    except Exception as e:
+        print(f"🔇 Offline TTS error: {e}")
 
 def speak(text):
     global stop_speaking
@@ -57,28 +67,42 @@ def speak(text):
             audio = AudioSegment.from_file(buffer, format="mp3")
 
             if not stop_speaking:
-                play(audio)
+                try:
+                    play(audio)
+                except Exception as e:
+                    print("🔊 Playback error:", e)
 
         except Exception as e:
-            print("⚠️ edge-tts failed, using fallback:", e)
+            print("⚠️ edge-tts failed, falling back to offline:", e)
             speak_offline(text)
 
     def run_async():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(run_tts())
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(run_tts())
+        except Exception as e:
+            print(f"[TTS Thread Error] {e}")
+            speak_offline(text)
 
-    threading.Thread(target=run_async).start()
+    threading.Thread(target=run_async, daemon=True).start()
 
 def stop_speech():
     global stop_speaking
     stop_speaking = True
-    engine.stop()
+    try:
+        engine.stop()
+    except Exception:
+        pass
     print("⛔ Speech stopped")
 
 def human_speak(answer):
     filler = random.choice([
-        "Got it..."
+        "Got it...",
+        "Let me respond...",
+        "One second...",
+        "Alright...",
+        "Okay, here's what I found..."
     ])
 
     def run_human_speak():
@@ -94,4 +118,4 @@ def human_speak(answer):
         else:
             speak(answer.strip())
 
-    threading.Thread(target=run_human_speak).start()
+    threading.Thread(target=run_human_speak, daemon=True).start()

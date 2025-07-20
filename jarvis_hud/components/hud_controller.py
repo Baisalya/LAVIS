@@ -44,7 +44,10 @@ class HUDController:
 
     def type_live_text(self, partial_text: str):
         """Live plain text typing with no color"""
-        Clock.schedule_once(lambda dt: self.overlay.replace_last_message(f"[color=ffffff]{partial_text}[/color]"))
+        Clock.schedule_once(lambda dt: self.overlay.update_live_input(partial_text), 0)
+    def clear_live_text(self):
+        Clock.schedule_once(lambda dt: self.overlay.clear_live_input(), 0)
+
 
     def _type_out_combo(self, plain_text: str, formatted_text: str, delay=0.02):
         def typer():

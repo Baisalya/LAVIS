@@ -1,4 +1,3 @@
-
 import os
 import json
 import time
@@ -22,7 +21,7 @@ except ImportError:
     def append_hud_console(message): pass
 
 AUTHENTICATION_ENABLED = False
-# === Paths for dual models ===
+
 COMMAND_MODEL_PATH = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "..", "vosk-model-en-in-0.5", "vosk-model-small-en-us-0.15"
 ))
@@ -30,7 +29,6 @@ FREEFORM_MODEL_PATH = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "..", "vosk-model-en-in-0.5", "vosk-model-en-us-daanzu-20200905"
 ))
 COMMANDS_JSON_PATH = os.path.join(os.path.dirname(__file__), "commands.json")
-# === Globals ===
 
 command_queue = Queue()
 audio_stream = None
@@ -45,7 +43,6 @@ last_spoken_text = ""
 def set_last_spoken_text(text):
     global last_spoken_text
     last_spoken_text = text.lower().strip()
-# === Load Vosk models ===
 
 os.environ["VOSK_LOG_LEVEL"] = "0"
 command_model = Model(COMMAND_MODEL_PATH)
@@ -55,13 +52,8 @@ def load_command_grammar():
     try:
         with open(COMMANDS_JSON_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-            if isinstance(data, list):
-                return data
-            else:
-                append_hud_console("⚠️ Invalid format in commands.json.")
-                return []
+            return data if isinstance(data, list) else []
     except Exception as e:
-        print(f"❌ Failed to load grammar: {e}")
         append_hud_console(f"❌ Failed to load grammar: {e}")
         return []
 
@@ -69,7 +61,6 @@ def _update_hud_text(text: str):
     controller = get_hud_controller()
     if controller:
         Clock.schedule_once(lambda dt: controller.type_live_text(text), 0)
-# === State Control ===
 
 def set_session_mode(active: bool):
     global _in_session
@@ -77,38 +68,31 @@ def set_session_mode(active: bool):
     msg = f"🧠 Session mode: {'ON' if active else 'OFF'}"
     print(msg)
     append_hud_console(msg)
-    prefix = "SL:" if active else "L:"
-    status = "💬 Session Chatting..." if active else "🟢 Listening"
-    _update_hud_text(f"{prefix} {status} 🎙️")
+    _update_hud_text(f"{'SL:' if active else 'L:'} {'💬 Chatting' if active else '🟢 Listening'} 🎙️")
 
 def pause_listening():
     global _paused
     _paused = True
-    print("⏸️ Listening paused.")
     append_hud_console("⏸️ Listening paused.")
     _update_hud_text("⏸️ Listening paused 🎙️")
 
 def resume_listening():
     global _paused
     _paused = False
-    print("▶️ Listening resumed.")
     append_hud_console("▶️ Listening resumed.")
     _update_hud_text("🟢 Listening resumed 🎙️")
 
 def toggle_auth(enabled: bool):
     global AUTHENTICATION_ENABLED
     AUTHENTICATION_ENABLED = enabled
-    msg = f"🔁 Voice authentication {'enabled ✅' if enabled else 'disabled ❌'}"
-    print(msg)
-    append_hud_console(msg)
-# === Listening HUD Animation ===
+    append_hud_console(f"🔁 Voice authentication {'enabled ✅' if enabled else 'disabled ❌'}")
 
 def _listening_indicator():
     animation = ['|', '/', '-', '\\']
     idx = 0
     while _listening:
         status = "⏸️ Paused" if _paused else (
-            f"SL: 💬 Session Chatting... {animation[idx % len(animation)]}"
+            f"SL: 💬 Chatting... {animation[idx % len(animation)]}"
             if _in_session else f"L: 🟢 Listening {animation[idx % len(animation)]}"
         )
         _update_hud_text(f"{status} 🎙️")
@@ -119,16 +103,11 @@ def _listening_indicator():
 def calculate_rms(audio_data):
     try:
         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
-        if samples.size == 0:
-            return 0
         rms = np.sqrt(np.mean(np.square(samples)))
-        if np.isnan(rms) or np.isinf(rms):
-            return 0
-        return int(rms)
+        return int(rms if np.isfinite(rms) else 0)
     except Exception as e:
         print(f"[RMS] Error: {e}")
         return 0
-# === Vosk Listening Thread ===
 
 def _vosk_listen_loop():
     global audio_stream
@@ -164,72 +143,65 @@ def _vosk_listen_loop():
                 time.sleep(0.1)
                 continue
 
-            data = audio_stream.read(2000, exception_on_overflow=False)
-            if not data:
+            try:
+                data = audio_stream.read(2000, exception_on_overflow=False)
+            except Exception as e:
+                print(f"🔇 Audio read error: {e}")
                 continue
 
-            # Mic bar
             rms_level = calculate_rms(data)
-            bar = "█" * (rms_level // 500)
-            print(f"🎙️ Mic: {bar:<20} ({rms_level})", end="\r")
-            if controller and hasattr(controller, "hud") and hasattr(controller.hud, "mic_controller"):
+            if controller and hasattr(controller.hud, "mic_controller"):
                 controller.hud.mic_controller.update_level(rms_level)
-            #print(f"📢 Mic RMS: {rms_level}")
 
             now = time.time()
 
             if command_recognizer.AcceptWaveform(data):
-                result = json.loads(command_recognizer.Result())
-                query = result.get("text", "").strip().lower()
-
-                if fuzz.ratio(query, last_spoken_text) > 85:
-                    append_hud_console("⛔ Ignored voice echo (command).")
-                    continue
-
-                if query in command_phrases:
-                    append_hud_console(f"✅ Recognized command: {query}")
-                    if controller:
-                        Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
-                    try:
+                try:
+                    result = json.loads(command_recognizer.Result())
+                    query = result.get("text", "").strip().lower()
+                    if fuzz.ratio(query, last_spoken_text) > 85:
+                        continue
+                    if query in command_phrases:
+                        if controller:
+                            Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
                         command_queue.put_nowait(query)
-                    except Full:
-                        append_hud_console("⚠️ Command queue full.")
-                    command_recognizer.Reset()
-                    freeform_recognizer.Reset()
-                    last_speech_time = now
-                    continue
+                        command_recognizer.Reset()
+                        freeform_recognizer.Reset()
+                        last_speech_time = now
+                        continue
+                except Exception as e:
+                    append_hud_console(f"[Command Error] {e}")
 
             if freeform_recognizer.AcceptWaveform(data):
-                result = json.loads(freeform_recognizer.Result())
-                query = result.get("text", "").strip().lower()
-
-                if fuzz.ratio(query, last_spoken_text) > 85:
-                    append_hud_console("⛔ Ignored voice echo (freeform).")
-                    continue
-
-                if query:
-                    append_hud_console(f"🌀 Fallback speech: {query}")
-                    set_session_mode(True)
-                    _update_hud_text("🤖 Chat mode: processing free input 🎙️")
-                    if controller:
-                        Clock.schedule_once(lambda dt: controller.update(query, category="fallback", typing=True))
-                    try:
+                try:
+                    result = json.loads(freeform_recognizer.Result())
+                    query = result.get("text", "").strip().lower()
+                    if fuzz.ratio(query, last_spoken_text) > 85:
+                        continue
+                    if query:
+                        set_session_mode(True)
+                        if controller:
+                            Clock.schedule_once(lambda dt: controller.update(query, category="fallback", typing=True))
                         command_queue.put_nowait(query)
-                    except Full:
-                        append_hud_console("⚠️ Queue full. Ignoring chat input.")
-                    Clock.schedule_once(lambda dt: set_session_mode(False), 10)
-                    command_recognizer.Reset()
-                    freeform_recognizer.Reset()
-                    last_speech_time = now
-                    continue
+                        Clock.schedule_once(lambda dt: set_session_mode(False), 10)
+                        Clock.schedule_once(lambda dt: controller.clear_live_text(), 0)
+                        command_recognizer.Reset()
+                        freeform_recognizer.Reset()
+                        last_speech_time = now
+                        continue
+                except Exception as e:
+                    append_hud_console(f"[Freeform Error] {e}")
 
-            partial_result = json.loads(freeform_recognizer.PartialResult())
-            partial = partial_result.get("partial", "").strip().lower()
-            if partial and partial != _last_partial:
-                _last_partial = partial
-                append_hud_console(f"🔎 Partial: {partial}")
-                _update_hud_text(f"🗣️ {partial}")
-                last_speech_time = now
+            try:
+                partial_result = json.loads(freeform_recognizer.PartialResult())
+                partial = partial_result.get("partial", "").strip().lower()
+                if partial and partial != _last_partial:
+                    _last_partial = partial
+                    append_hud_console(f"🔎 Partial: {partial}")
+                    _update_hud_text(f"🗣️ {partial}")
+                    last_speech_time = now
+            except Exception:
+                pass
 
             if now - last_speech_time > silence_timeout:
                 _last_partial = ""
@@ -237,18 +209,15 @@ def _vosk_listen_loop():
                 freeform_recognizer.Reset()
                 last_speech_time = now
 
+    except Exception as e:
+        append_hud_console("🚫 Mic or recognition failed:")
+        traceback.print_exc()
+    finally:
         if audio_stream:
             audio_stream.stop_stream()
             audio_stream.close()
-            audio_stream = None
-
-    except Exception:
-        append_hud_console("🚫 Audio device or recognition error:")
-        traceback.print_exc()
-    finally:
         if p:
             p.terminate()
-# === Background Listening Control ===
 
 def start_background_listening():
     global _listening, _indicator_thread, _listener_thread, stop_listening
@@ -287,6 +256,8 @@ def stop_background_listening():
         _listener_thread.join(timeout=1)
 
     if audio_stream:
-        audio_stream.stop_stream()
-        audio_stream.close()
-        audio_stream = None
+        try:
+            audio_stream.stop_stream()
+            audio_stream.close()
+        except Exception:
+            pass

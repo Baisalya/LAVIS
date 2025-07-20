@@ -1,7 +1,6 @@
 import os, re, time, logging, threading, datetime
 from fuzzywuzzy import fuzz
 import random
-
 from playsound import playsound
 
 from LAVIS.jarvis.voice.speaker import speak
@@ -10,8 +9,7 @@ from LAVIS.jarvis.apps.chatbot import chatbot, train_chatbot
 from LAVIS.jarvis.commands.apps import open_windows_app, get_start_menu_apps
 from LAVIS.jarvis.voice.recognizer import start_background_listening, stop_background_listening, command_queue
 from LAVIS.jarvis.nlp.intent_detector import detect_intent
-from LAVIS.jarvis.web.fallback import handle_fallback
-from LAVIS.jarvis.web.fallback import load_config, detect_emotion
+from LAVIS.jarvis.web.fallback import handle_fallback, load_config, detect_emotion
 
 from jarvis_hud.main import update_hud_text, update_hud_status, hud_interface
 from LAVIS.hud_display import show_fallback_in_hud, show_hud_reply, show_hud_command
@@ -32,195 +30,214 @@ class LavisCore:
     def __init__(self):
         self.session_state = "sleep"
         self.control_mode = "normal"
-        self.hud_controller = HUDController(hud_interface) if hud_interface else self.get_fallback_console_hud()
+        try:
+            self.hud_controller = HUDController(hud_interface) if hud_interface else self.get_fallback_console_hud()
+        except Exception:
+            self.hud_controller = self.get_fallback_console_hud()
         self.crush = AssistantCrushMessages(USER_NAME)
         update_hud_status("Sleep")
 
     def get_fallback_console_hud(self):
-        from LAVIS.utils.console_hud import ConsoleHUDController
-        return ConsoleHUDController()
+        try:
+            from LAVIS.utils.console_hud import ConsoleHUDController
+            return ConsoleHUDController()
+        except Exception as e:
+            print(f"❌ Console HUD failed: {e}")
+            return None
 
     def hud_speak(self, message: str):
-        show_hud_reply("...", typing=True)
-        time.sleep(0.3)
-        show_hud_reply(message)
-        speak(message)
+        try:
+            show_hud_reply("...", typing=True)
+            time.sleep(0.3)
+            show_hud_reply(message)
+            speak(message)
+        except Exception as e:
+            print(f"[HUD Speak Error] {e}")
 
     def welcome(self):
-        if os.path.exists(AUDIO_STARTUP):
-            playsound(AUDIO_STARTUP)
-        self.hud_speak("Presence confirmed. Let's make things happen when you're ready.")
+        try:
+            if os.path.exists(AUDIO_STARTUP):
+                playsound(AUDIO_STARTUP)
+            self.hud_speak("Presence confirmed. Let's make things happen when you're ready.")
+        except Exception as e:
+            print(f"[Welcome Error] {e}")
 
     def check_wake_phrase(self, text):
-        text = text.lower().strip()
+        try:
+            text = text.lower().strip()
 
-        if re.search(r"\b(hello|hi)\s+(Lavis|Lavish|levies)\b", text) or fuzz.ratio(text, WAKE_UP_PHRASE) > 85:
-            if self.session_state == "sleep":
-                self.session_state = "normal"
-                update_hud_status("Online")
-                current_hour = datetime.datetime.now().hour
-                if 5 <= current_hour < 12:
-                    greeting = f"Good morning, {USER_NAME} "
-                elif 12 <= current_hour < 17:
-                    greeting = f"Good afternoon, {USER_NAME} "
-                elif 17 <= current_hour < 21:
-                    greeting = f"Good evening, {USER_NAME} "
+            if re.search(r"\b(hello|hi)\s+(Lavis|Lavish|levies|lobbies|ladies|labs)\b", text) or fuzz.ratio(text, WAKE_UP_PHRASE) > 85:
+                if self.session_state == "sleep":
+                    self.session_state = "normal"
+                    update_hud_status("Online")
+                    current_hour = datetime.datetime.now().hour
+                    if 5 <= current_hour < 12:
+                        greeting = f"Good morning, {USER_NAME} "
+                    elif 12 <= current_hour < 17:
+                        greeting = f"Good afternoon, {USER_NAME} "
+                    elif 17 <= current_hour < 21:
+                        greeting = f"Good evening, {USER_NAME} "
+                    else:
+                        greeting = self.crush.random_late_night_greeting()
+                    self.hud_speak(f"{greeting} Welcome back!")
                 else:
-                    greeting = self.crush.random_late_night_greeting()
-                self.hud_speak(f"{greeting} Welcome back!")
-            else:
-                responses = [
-                    "Yes? I'm right here.",
-                    "You called me?",
-                    "Standing by!",
-                    f"How can I help, {USER_NAME}?",
-                    "Reporting for duty!"
-                ]
-                self.hud_speak(random.choice(responses))
-            return True
+                    self.hud_speak(random.choice([
+                        "Yes? I'm right here.",
+                        "You called me?",
+                        "Standing by!",
+                        f"How can I help, {USER_NAME}?",
+                        "Reporting for duty!"
+                    ]))
+                return True
 
-        elif re.search(r"\b(jarvis\s+)?(sleep|go to sleep|shutdown|rest)\b", text):
-            self.session_state = "sleep"
-            self.hud_speak(f"Okay {USER_NAME}, I'm going to sleep now 🛌")
-            update_hud_status("Sleep")
-            return True
+            elif re.search(r"\b(jarvis\s+)?(sleep|go to sleep|shutdown|rest)\b", text):
+                self.session_state = "sleep"
+                self.hud_speak(f"Okay {USER_NAME}, I'm going to sleep now 🛌")
+                update_hud_status("Sleep")
+                return True
 
-        return False
+            return False
+        except Exception as e:
+            print(f"[Wake Phrase Error] {e}")
+            return False
 
     def extract_app_name(self, command: str) -> str:
         match = re.search(r"\b(open|start|launch|run)\b\s+(.+)", command.lower())
         return match.group(2).strip() if match else ""
 
     def handle_input(self, input_text):
-        if self.check_wake_phrase(input_text):
-            return
-
-        if self.session_state == "sleep":
-            return
-
-        # Enforce minimum input length unless it's a question
-        if len(input_text.strip().split()) < 2 and "?" not in input_text:
-            show_hud_reply("Please say a full sentence.")
-            return
-
-        command = re.sub(rf"\b{WAKE_WORD}\b", "", input_text, flags=re.IGNORECASE).strip() or input_text
-        self.hud_controller.update(command, category="command", typing=True)
-        command_lower = command.lower().strip()
-
-        if "activate hand control" in command_lower:
-            self.hud_speak("Activating hand control mode. Use your hand to control the system.")
-            from LAVIS.jarvis.master_controll.hand_controller import HandControl
-            threading.Thread(target=HandControl().run, daemon=True).start()
-            return
-
-        if "activate master control" in command_lower:
-            self.control_mode = "master_control"
-            self.hud_speak("Master control activated. You can now control screen and apps only.")
-            update_hud_status("Master Control")
-            return
-
-        elif "deactivate master control" in command_lower:
-            self.control_mode = "normal"
-            self.hud_speak("Master control deactivated. Full assistant is back online.")
-            update_hud_status("Online")
-            return
-
-        elif "activate restricted mode" in command_lower:
-            self.control_mode = "restricted"
-            self.hud_speak("Restricted mode activated. Only apps and file explorer are allowed.")
-            update_hud_status("Restricted")
-            return
-
-        elif "deactivate restricted mode" in command_lower:
-            self.control_mode = "normal"
-            self.hud_speak("Restricted mode deactivated.")
-            update_hud_status("Online")
-            return
-
-        if self.control_mode == "master_control":
-            from LAVIS.jarvis.master_controll.command_handler import handle_voice_command
-            if handle_voice_command(command): return
-            if handle_explorer(command):
-                show_hud_reply("Handled file explorer command.")
+        try:
+            if self.check_wake_phrase(input_text):
                 return
-            self.hud_speak("Command not allowed in master control mode.")
-            return
 
-        if self.control_mode == "restricted":
-            if command.startswith("open "):
+            if self.session_state == "sleep":
+                return
+
+            if len(input_text.strip().split()) < 2 and "?" not in input_text:
+                show_hud_reply("Please say a full sentence.")
+                return
+
+            command = re.sub(rf"\b{WAKE_WORD}\b", "", input_text, flags=re.IGNORECASE).strip() or input_text
+            self.hud_controller.update(command, category="command", typing=True)
+            command_lower = command.lower().strip()
+
+            if "activate hand control" in command_lower:
+                self.hud_speak("Activating hand control mode. Use your hand to control the system.")
+                try:
+                    from LAVIS.jarvis.master_controll.hand_controller import HandControl
+                    threading.Thread(target=HandControl().run, daemon=True).start()
+                except Exception as e:
+                    self.hud_speak("Error activating hand control.")
+                    print(f"[Hand Control Error] {e}")
+                return
+
+            if "activate master control" in command_lower:
+                self.control_mode = "master_control"
+                self.hud_speak("Master control activated. You can now control screen and apps only.")
+                update_hud_status("Master Control")
+                return
+
+            if "deactivate master control" in command_lower:
+                self.control_mode = "normal"
+                self.hud_speak("Master control deactivated. Full assistant is back online.")
+                update_hud_status("Online")
+                return
+
+            if "activate restricted mode" in command_lower:
+                self.control_mode = "restricted"
+                self.hud_speak("Restricted mode activated. Only apps and file explorer are allowed.")
+                update_hud_status("Restricted")
+                return
+
+            if "deactivate restricted mode" in command_lower:
+                self.control_mode = "normal"
+                self.hud_speak("Restricted mode deactivated.")
+                update_hud_status("Online")
+                return
+
+            if self.control_mode == "master_control":
+                from LAVIS.jarvis.master_controll.command_handler import handle_voice_command
+                if handle_voice_command(command): return
+                if handle_explorer(command):
+                    show_hud_reply("Handled file explorer command.")
+                    return
+                self.hud_speak("Command not allowed in master control mode.")
+                return
+
+            if self.control_mode == "restricted":
+                if command.startswith("open "):
+                    app_name = self.extract_app_name(command)
+                    if app_name and open_windows_app(app_name):
+                        show_hud_reply(f"Opening {app_name}")
+                    else:
+                        self.hud_speak(f"Restricted: Failed to open {app_name}")
+                    return
+                elif handle_explorer(command):
+                    show_hud_reply("Handled file explorer command.")
+                    return
+                self.hud_speak("Command not allowed in restricted mode.")
+                return
+
+            intent = detect_intent(command)
+            print(f"🧠 Intent Detected: {intent}")
+
+            if intent == "command":
+                handled = handle_command(command)
                 app_name = self.extract_app_name(command)
+
                 if app_name and open_windows_app(app_name):
                     show_hud_reply(f"Opening {app_name}")
                     return
-                else:
-                    self.hud_speak(f"Restricted: Failed to open {app_name}")
-                    return
-            elif handle_explorer(command):
-                show_hud_reply("Handled file explorer command.")
-                return
-            self.hud_speak("Command not allowed in restricted mode.")
-            return
-
-        intent = detect_intent(command)
-        print(f"🧠 Intent Detected: {intent}")
-
-        if intent == "command":
-            handled = handle_command(command)
-            app_name = self.extract_app_name(command)
-
-            if app_name:
-                success = open_windows_app(app_name)
-                if success:
-                    show_hud_reply(f"Opening {app_name}")
-                    return
-                elif not handled:
-                    self.hud_speak(f"Sorry sir, I couldn't open {app_name}.")
+                if handled:
+                    show_hud_reply("Executed system command.")
                     return
 
-            if handled:
-                show_hud_reply("Executed system command.")
+                self.hud_speak(f"Sorry sir, I couldn't process the command: {command}")
                 return
 
-            self.hud_speak(f"Sorry sir, I couldn't process the command: {command}")
-            return
-
-        elif intent == "input_control":
-            if handle_input_control(command):
+            if intent == "input_control" and handle_input_control(command):
                 show_hud_reply("Handled input control.")
                 return
 
-        elif intent == "explorer":
-            if handle_explorer(command):
+            if intent == "explorer" and handle_explorer(command):
                 show_hud_reply("Handled file explorer command.")
                 return
 
-        elif intent == "network":
-            from LAVIS.jarvis.commands.network_bluetooth import handle_network_bluetooth
-            if handle_network_bluetooth(command):
-                show_hud_reply("Network/Bluetooth command handled.")
+            if intent == "network":
+                from LAVIS.jarvis.commands.network_bluetooth import handle_network_bluetooth
+                if handle_network_bluetooth(command):
+                    show_hud_reply("Network/Bluetooth command handled.")
+                    return
+
+            if intent == "conversation":
+                show_hud_reply("Let me think about that...")
+
+                def run_fallback():
+                    try:
+                        response = handle_fallback(command)
+                        self.session_state = "normal"
+                        if isinstance(response, str) and response.strip():
+                            self.hud_controller.update(response, category="reply", typing=True)
+                    except Exception as e:
+                        print(f"[Fallback Error] {e}")
+
+                threading.Thread(target=run_fallback, daemon=True).start()
                 return
 
-        elif intent == "conversation":
-            show_hud_reply("Let me think about that...")
+            show_hud_reply("Trying to find an answer...")
 
             def run_fallback():
-                response = handle_fallback(command)
-                self.session_state = "normal"
-                if isinstance(response, str) and response.strip():
-                    self.hud_controller.update(response, category="reply", typing=True)
+                try:
+                    response = handle_fallback(command)
+                    self.session_state = "normal"
+                    self.hud_controller.update(response or "Sorry, I couldn't find a response.", category="reply", typing=True)
+                except Exception as e:
+                    print(f"[Fallback Error] {e}")
 
             threading.Thread(target=run_fallback, daemon=True).start()
-            return
 
-        show_hud_reply("Trying to find an answer...")
-
-        def run_fallback():
-            response = handle_fallback(command)
-            self.session_state = "normal"
-            self.hud_controller.update(response or "Sorry, I couldn't find a response.", category="reply", typing=True)
-
-        threading.Thread(target=run_fallback, daemon=True).start()
-
+        except Exception as e:
+            print(f"[Handle Input Error] {e}")
 
 class LavisRunner:
     def __init__(self):
@@ -236,27 +253,29 @@ class LavisRunner:
             start_background_listening()
 
             while True:
-                if not command_queue.empty():
-                    input_text = command_queue.get()
-                    self.core.hud_controller.type_live_text(input_text)
-                    print("🎤 Heard:", input_text)
-                    self.core.handle_input(input_text)
-                else:
-                    time.sleep(0.1)
+                try:
+                    if not command_queue.empty():
+                        input_text = command_queue.get()
+                        self.core.hud_controller.type_live_text(input_text)
+                        print("🎤 Heard:", input_text)
+                        self.core.handle_input(input_text)
+                    else:
+                        time.sleep(0.1)
+                except Exception as e:
+                    logging.exception("⚠️ Runtime error in main loop:")
+                    update_hud_text(str(e), category="error")
+                    speak("Something went wrong during input processing.")
 
         except KeyboardInterrupt:
             stop_background_listening()
             self.core.hud_speak("Jarvis shutting down.")
-
         except Exception as e:
-            logging.exception("❌ Error in main loop:")
+            logging.exception("❌ Error in outer main loop:")
             update_hud_text(str(e), category="error")
             speak("Something went wrong.")
 
-
 def main():
     LavisRunner().run()
-
 
 if __name__ == "__main__":
     print("🧠 Running Lavis in console-only mode")
