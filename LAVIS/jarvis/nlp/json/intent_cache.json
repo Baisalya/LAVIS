@@ -273,5 +273,10 @@
   "you mean your welcome back": "conversation",
   "good good girl": "conversation",
   "there is i hear you cry": "conversation",
-  "one white sap": "unknown"
+  "one white sap": "unknown",
+  "my sense is i still": "conversation",
+  "how old am i": "learning",
+  "twelve our three ninety nine eleven years old": "unknown",
+  "what can you do": "explorer",
+  "would you ever betray": "conversation"
 }

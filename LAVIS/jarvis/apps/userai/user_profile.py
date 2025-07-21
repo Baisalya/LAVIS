@@ -7,26 +7,31 @@ import os
 # ✅ Load user profile from JSON
 import os
 import json
+import json
+import re
+from datetime import datetime
+from fuzzywuzzy import fuzz
+import os
 
 def load_user_profile(filename="user_profile.json") -> dict:
-    # Absolute path of current script
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Construct full path to the profile file
     profile_path = os.path.join(script_dir, filename)
 
-    # Try loading the profile
     try:
         with open(profile_path, "r", encoding="utf-8") as f:
             profile = json.load(f)
             print(f"✅ Loaded profile from {profile_path}")
             return profile
     except FileNotFoundError:
-        print(f"❌ Profile file not found at {profile_path}")
+        print(f"❌ Profile not found: {profile_path}")
     except json.JSONDecodeError as e:
-        print(f"❌ Error decoding JSON: {e}")
+        print(f"❌ Profile JSON error: {e}")
+    except Exception as e:
+        print(f"❌ Unknown profile error: {e}")
 
     return {}
+
+
 
 # Extract keywords from question
 def extract_keywords(text: str):
