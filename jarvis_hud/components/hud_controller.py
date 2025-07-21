@@ -6,8 +6,8 @@ from kivy.clock import Clock
 
 class HUDController:
     def __init__(self, hud_widget):
-        self.hud = hud_widget  # HUDInterface
-        self.overlay = getattr(self.hud, 'text_overlay', None)  # ✅ Reference to HUDTextOverlay
+        self.hud = hud_widget
+        self.overlay = getattr(self.hud, 'text_overlay', None)
         self._last_text = ""
         self._last_time = 0
         self._typing_lock = Lock()
@@ -23,7 +23,9 @@ class HUDController:
         now = time.time()
         clean_text = self._strip_color_tags(text)
 
-        # Avoid duplicates within 1s and not typing
+        if not clean_text.strip():
+            return
+
         if (not typing and clean_text == self._last_text and (now - self._last_time) < 1.0):
             print(f"⚠️ Skipped duplicate: {clean_text}")
             return
@@ -37,28 +39,39 @@ class HUDController:
 
         print(f"🧪 HUD[{category}] >> {formatted}")
 
-        if typing and len(clean_text) > 10:
-            self._type_out_combo(clean_text, formatted)
-        else:
-            self.overlay.append_message(formatted)
+        try:
+            if typing and len(clean_text) > 10:
+                self._type_out_combo(clean_text, formatted)
+            else:
+                self.overlay.append_message(formatted)
+        except Exception as e:
+            print(f"[HUDController Error] update(): {e}")
 
     def type_live_text(self, partial_text: str):
-        """Live plain text typing with no color"""
-        Clock.schedule_once(lambda dt: self.overlay.update_live_input(partial_text), 0)
-    def clear_live_text(self):
-        Clock.schedule_once(lambda dt: self.overlay.clear_live_input(), 0)
+        try:
+            Clock.schedule_once(lambda dt: self.overlay.update_live_input(partial_text), 0)
+        except Exception as e:
+            print(f"[HUDController Error] type_live_text: {e}")
 
+    def clear_live_text(self):
+        try:
+            Clock.schedule_once(lambda dt: self.overlay.clear_live_input(), 0)
+        except Exception as e:
+            print(f"[HUDController Error] clear_live_text: {e}")
 
     def _type_out_combo(self, plain_text: str, formatted_text: str, delay=0.02):
         def typer():
             with self._typing_lock:
-                self.overlay.append_message("")  # New blank line
-                output = ""
-                for char in plain_text:
-                    output += char
-                    Clock.schedule_once(lambda dt, o=output: self.overlay.replace_last_message(o))
-                    time.sleep(delay)
-                Clock.schedule_once(lambda dt: self.overlay.replace_last_message(formatted_text))
+                try:
+                    self.overlay.append_message("")
+                    output = ""
+                    for char in plain_text:
+                        output += char
+                        Clock.schedule_once(lambda dt, o=output: self.overlay.replace_last_message(o))
+                        time.sleep(delay)
+                    Clock.schedule_once(lambda dt: self.overlay.replace_last_message(formatted_text))
+                except Exception as e:
+                    print(f"[HUDController Error] typer(): {e}")
 
         threading.Thread(target=typer, daemon=True).start()
 
@@ -66,13 +79,19 @@ class HUDController:
         self.update(text, category, typing)
 
     def raw(self, text: str, replace_last=False):
-        if replace_last:
-            self.overlay.replace_last_message(text)
-        else:
-            self.overlay.append_message(text)
+        try:
+            if replace_last:
+                self.overlay.replace_last_message(text)
+            else:
+                self.overlay.append_message(text)
+        except Exception as e:
+            print(f"[HUDController Error] raw(): {e}")
 
     def highlight(self, text: str):
-        self.overlay.append_message(f"[color=ffff00]{text}[/color]")
+        try:
+            self.overlay.append_message(f"[color=ffff00]{text}[/color]")
+        except Exception as e:
+            print(f"[HUDController Error] highlight(): {e}")
 
     @staticmethod
     def _strip_color_tags(text):
