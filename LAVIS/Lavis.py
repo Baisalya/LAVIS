@@ -105,6 +105,8 @@ class LavisCore:
         match = re.search(r"\b(open|start|launch|run)\b\s+(.+)", command.lower())
         return match.group(2).strip() if match else ""
 
+   # === handle_input() Upgrade in LavisCore ===
+
     def handle_input(self, input_text):
         try:
             if self.check_wake_phrase(input_text):
@@ -121,6 +123,7 @@ class LavisCore:
             self.hud_controller.update(command, category="command", typing=True)
             command_lower = command.lower().strip()
 
+            # === Mode controls ===
             if "activate hand control" in command_lower:
                 self.hud_speak("Activating hand control mode. Use your hand to control the system.")
                 try:
@@ -155,6 +158,15 @@ class LavisCore:
                 update_hud_status("Online")
                 return
 
+            # === Offline hardcoded command match ===
+            from LAVIS.jarvis.nlp.intent_detector import match_hardcoded_command, resolve_app_name
+            offline_handler = match_hardcoded_command(command_lower)
+            if offline_handler:
+                offline_handler()
+                show_hud_reply("Offline command matched.")
+                return
+
+            # === Control mode limits ===
             if self.control_mode == "master_control":
                 from LAVIS.jarvis.master_controll.command_handler import handle_voice_command
                 if handle_voice_command(command): return
@@ -178,20 +190,21 @@ class LavisCore:
                 self.hud_speak("Command not allowed in restricted mode.")
                 return
 
+            # === Intent classification ===
+            from LAVIS.jarvis.nlp.intent_detector import detect_intent
             intent = detect_intent(command)
             print(f"🧠 Intent Detected: {intent}")
 
             if intent == "command":
+                from LAVIS.jarvis.commands.commands import handle_command
                 handled = handle_command(command)
-                app_name = self.extract_app_name(command)
-
+                app_name = self.extract_app_name(command) or resolve_app_name(command)
                 if app_name and open_windows_app(app_name):
                     show_hud_reply(f"Opening {app_name}")
                     return
                 if handled:
                     show_hud_reply("Executed system command.")
                     return
-
                 self.hud_speak(f"Sorry sir, I couldn't process the command: {command}")
                 return
 
@@ -211,30 +224,29 @@ class LavisCore:
 
             if intent == "conversation":
                 show_hud_reply("Let me think about that...")
-
                 def run_fallback():
                     try:
+                        from LAVIS.jarvis.web.fallback import handle_fallback
                         response = handle_fallback(command)
                         self.session_state = "normal"
                         if isinstance(response, str) and response.strip():
                             self.hud_controller.update(response, category="reply", typing=True)
                     except Exception as e:
                         print(f"[Fallback Error] {e}")
-
                 threading.Thread(target=run_fallback, daemon=True).start()
                 return
 
+            # Default fallback
             show_hud_reply("Trying to find an answer...")
-
-            def run_fallback():
+            def run_final_fallback():
                 try:
+                    from LAVIS.jarvis.web.fallback import handle_fallback
                     response = handle_fallback(command)
                     self.session_state = "normal"
                     self.hud_controller.update(response or "Sorry, I couldn't find a response.", category="reply", typing=True)
                 except Exception as e:
                     print(f"[Fallback Error] {e}")
-
-            threading.Thread(target=run_fallback, daemon=True).start()
+            threading.Thread(target=run_final_fallback, daemon=True).start()
 
         except Exception as e:
             print(f"[Handle Input Error] {e}")
