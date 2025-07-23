@@ -1,31 +1,56 @@
 # LAVIS/voice_control/command_handler.py
-
 import re
+import json
 from LAVIS.hud_display import show_hud_reply
 from LAVIS.jarvis.master_controll.advanced_controller import (
-    WindowManager,
-    MouseController,
-    KeyboardController,
-    FileExplorer,
-    VolumeController,
-    MediaControl,
-    ScreenControl,
-    ScreenshotController,
-    ClipboardController,
-    WebControl,
-    AppCloser,
-    Scheduler,
-    SmartOCRHandler,
-    SmartAutocomplete,
-    Authentication
+    WindowManager, MouseController, KeyboardController, FileExplorer,
+    VolumeController, MediaControl, ScreenControl, ScreenshotController,
+    ClipboardController, WebControl, AppCloser, Scheduler,
+    SmartOCRHandler, Authentication
 )
 from LAVIS.jarvis.nlp.fallback_corrector import correct_command
 from LAVIS.jarvis.commands.apps import open_windows_app
 
 
+def load_alias_map():
+    try:
+        with open("LAVIS/jarvis/nlp/voice_command_alias.json", "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+
+def save_alias(command_key, user_phrase):
+    path = "LAVIS/jarvis/nlp/voice_command_alias.json"
+    try:
+        with open(path, "r+") as f:
+            data = json.load(f)
+            if command_key not in data:
+                data[command_key] = [user_phrase]
+            elif user_phrase not in data[command_key]:
+                data[command_key].append(user_phrase)
+            f.seek(0)
+            json.dump(data, f, indent=4)
+            f.truncate()
+    except:
+        pass
+
+
+def resolve_from_alias(command, alias_map):
+    for actual_cmd, patterns in alias_map.items():
+        for p in patterns:
+            if p in command:
+                print(f"🔁 Alias matched: '{p}' → '{actual_cmd}'")
+                return actual_cmd
+    return command
+
+
 def handle_voice_command(raw_command: str) -> bool:
     corrected_text = correct_command(raw_command).strip().lower()
     print(f"🛠️ Corrected Voice Command: {corrected_text}")
+
+    alias_map = load_alias_map()
+    corrected_text = resolve_from_alias(corrected_text, alias_map)
 
     try:
         if corrected_text.startswith("click "):
@@ -89,7 +114,7 @@ def handle_voice_command(raw_command: str) -> bool:
         elif corrected_text == "lock screen":
             ScreenControl.lock_screen()
 
-        elif corrected_text == "take screenshot":
+        elif corrected_text in ["take screenshot", "take a screenshot", "capture screen", "snap screen"]:
             ScreenshotController.take_screenshot()
 
         elif corrected_text == "copy this":
@@ -123,6 +148,14 @@ def handle_voice_command(raw_command: str) -> bool:
             Authentication.autofill_password(pwd)
 
         else:
+            # 🤖 LLM fallback to learn new phrasing
+            print("🤖 Falling back to NLP intent...")
+            from LAVIS.jarvis.web.fallback import handle_fallback_intent
+            result = handle_fallback_intent(raw_command)
+            if result and isinstance(result, str):
+                print(f"💡 Learned new command: '{raw_command}' → '{result}'")
+                save_alias(result, raw_command)
+                return handle_voice_command(result)
             show_hud_reply(f"❓ Unrecognized command: {corrected_text}")
             return False
 
