@@ -58,11 +58,6 @@ def speak(text):
                 if chunk["type"] == "audio":
                     buffer.write(chunk["data"])
 
-            if stop_speaking:
-                print("🛑 Interrupted before playback.")
-                return
-
-            print("[TTS] Speaking, recognizer paused.")
             buffer.seek(0)
             audio = AudioSegment.from_file(buffer, format="mp3")
 
@@ -71,9 +66,10 @@ def speak(text):
                     play(audio)
                 except Exception as e:
                     print("🔊 Playback error:", e)
+                    speak_offline(text)
 
         except Exception as e:
-            print("⚠️ edge-tts failed, falling back to offline:", e)
+            print("⚠️ edge-tts failed, using offline fallback:", e)
             speak_offline(text)
 
     def run_async():
@@ -85,7 +81,11 @@ def speak(text):
             print(f"[TTS Thread Error] {e}")
             speak_offline(text)
 
-    threading.Thread(target=run_async, daemon=True).start()
+    try:
+        threading.Thread(target=run_async, daemon=True).start()
+    except Exception as e:
+        print("[TTS Startup Error]", e)
+        speak_offline(text)
 
 def stop_speech():
     global stop_speaking
@@ -107,15 +107,22 @@ def human_speak(answer):
 
     def run_human_speak():
         global stop_speaking
-        stop_speaking = False
+        try:
+            stop_speaking = False
+            speak(filler)
+            time.sleep(1.5)
+            stop_speaking = False
 
-        speak(filler)
-        time.sleep(1.5)
-        stop_speaking = False
+            if not answer or len(answer.strip()) < 5:
+                speak("Sorry, I don't have anything useful.")
+            else:
+                speak(answer.strip())
+        except Exception as e:
+            print("❌ human_speak failed:", e)
+            speak_offline("Sorry, something went wrong.")
 
-        if not answer or len(answer.strip()) < 5:
-            speak("Sorry, I don't have anything useful.")
-        else:
-            speak(answer.strip())
-
-    threading.Thread(target=run_human_speak, daemon=True).start()
+    try:
+        threading.Thread(target=run_human_speak, daemon=True).start()
+    except Exception as e:
+        print("[human_speak Thread Error]", e)
+        speak_offline(answer)

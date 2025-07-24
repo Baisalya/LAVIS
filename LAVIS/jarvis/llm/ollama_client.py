@@ -27,13 +27,20 @@ def ask_ollama(prompt: str, model: str = "tinyllama") -> str:
     try:
         response = requests.post(
             "http://localhost:11434/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False}
+            json={"model": model, "prompt": prompt, "stream": False},
+            timeout=15
         )
+
+        if response.status_code != 200:
+            print("❌ Ollama API error:", response.status_code, response.text)
+            return ""
+
         data = response.json()
         return data.get("response", "").strip()
+
     except Exception as e:
         print("❌ Ollama error:", e)
-        return "unknown"
+        return ""
 
 def install_ollama_windows():
     print("⬇️ Downloading Ollama installer...")

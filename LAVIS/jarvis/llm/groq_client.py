@@ -21,19 +21,23 @@ def ask_groq(prompt: str) -> str:
                 "model": GROQ_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7
-            }
+            },
+            timeout=15
         )
 
-        data = response.json()
+        if response.status_code != 200:
+            print(f"❌ Groq API error: {response.status_code}")
+            print(response.text)
+            return None
 
-        # Debug if anything goes wrong
-        if "choices" not in data:
-            print("❌ Groq API response error:")
+        data = response.json()
+        if "choices" not in data or not data["choices"]:
+            print("❌ Groq API returned no choices:")
             print(json.dumps(data, indent=2))
             return None
 
         return data["choices"][0]["message"]["content"].strip()
 
     except Exception as e:
-        print("❌ Groq API error:", e)
+        print("❌ Exception in Groq API:", e)
         return None
