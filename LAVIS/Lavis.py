@@ -2,23 +2,23 @@ import os, re, time, logging, threading, datetime
 from fuzzywuzzy import fuzz
 import random
 from playsound import playsound
+from kivy.clock import Clock
 
 from LAVIS.jarvis.voice.speaker import speak
 from LAVIS.jarvis.commands.commands import handle_command
 from LAVIS.jarvis.apps.chatbot import chatbot, train_chatbot
 from LAVIS.jarvis.commands.apps import open_windows_app, get_start_menu_apps
 from LAVIS.jarvis.voice.recognizer import start_background_listening, stop_background_listening, command_queue
-from LAVIS.jarvis.nlp.intent_detector import detect_intent
-from LAVIS.jarvis.web.fallback import handle_fallback, load_config, detect_emotion
+from LAVIS.jarvis.nlp.intent_detector import detect_intent, match_hardcoded_command, resolve_app_name
+from LAVIS.jarvis.web.fallback import handle_fallback
+from LAVIS.jarvis.commands.explorer import handle_explorer
+from LAVIS.jarvis.commands.input_control import handle_input_control
+from LAVIS.jarvis.apps.userai.lavish_messages import AssistantCrushMessages
+from LAVIS.utils.hud_utils import get_hud_controller
 
 from jarvis_hud.main import update_hud_text, update_hud_status, hud_interface
 from LAVIS.hud_display import show_fallback_in_hud, show_hud_reply, show_hud_command
 from jarvis_hud.components.hud_controller import HUDController
-from LAVIS.utils.hud_utils import get_hud_controller
-
-from LAVIS.jarvis.commands.explorer import handle_explorer
-from LAVIS.jarvis.commands.input_control import handle_input_control
-from LAVIS.jarvis.apps.userai.lavish_messages import AssistantCrushMessages
 
 WAKE_WORD = "Lavish"
 WAKE_UP_PHRASE = "hello Lavish"
@@ -46,13 +46,15 @@ class LavisCore:
             return None
 
     def hud_speak(self, message: str):
-        try:
-            show_hud_reply("...", typing=True)
-            time.sleep(0.3)
-            show_hud_reply(message)
-            speak(message)
-        except Exception as e:
-            print(f"[HUD Speak Error] {e}")
+        def speak_thread():
+            try:
+                Clock.schedule_once(lambda dt: show_hud_reply("...", typing=True), 0)
+                time.sleep(0.3)
+                Clock.schedule_once(lambda dt: show_hud_reply(message), 0)
+                speak(message)
+            except Exception as e:
+                print(f"[HUD Speak Error] {e}")
+        threading.Thread(target=speak_thread, daemon=True).start()
 
     def welcome(self):
         try:
@@ -66,10 +68,10 @@ class LavisCore:
         try:
             text = text.lower().strip()
 
-            if re.search(r"\b(hello|hi)\s+(Lavis|Lavish|levies|lobbies|ladies|labs)\b", text) or fuzz.ratio(text, WAKE_UP_PHRASE) > 85:
+            if re.search(r"\b(hello|hi)\s+(lavis|lavish|levies|lobbies|ladies|labs)\b", text) or fuzz.ratio(text, WAKE_UP_PHRASE) > 85:
                 if self.session_state == "sleep":
                     self.session_state = "normal"
-                    update_hud_status("Online")
+                    Clock.schedule_once(lambda dt: update_hud_status("Online"), 0)
                     current_hour = datetime.datetime.now().hour
                     if 5 <= current_hour < 12:
                         greeting = f"Good morning, {USER_NAME} "
@@ -93,7 +95,7 @@ class LavisCore:
             elif re.search(r"\b(jarvis\s+)?(sleep|go to sleep|shutdown|rest)\b", text):
                 self.session_state = "sleep"
                 self.hud_speak(f"Okay {USER_NAME}, I'm going to sleep now 🛌")
-                update_hud_status("Sleep")
+                Clock.schedule_once(lambda dt: update_hud_status("Sleep"), 0)
                 return True
 
             return False
@@ -105,8 +107,6 @@ class LavisCore:
         match = re.search(r"\b(open|start|launch|run)\b\s+(.+)", command.lower())
         return match.group(2).strip() if match else ""
 
-   # === handle_input() Upgrade in LavisCore ===
-
     def handle_input(self, input_text):
         try:
             if self.check_wake_phrase(input_text):
@@ -116,11 +116,11 @@ class LavisCore:
                 return
 
             if len(input_text.strip().split()) < 2 and "?" not in input_text:
-                show_hud_reply("Please say a full sentence.")
+                Clock.schedule_once(lambda dt: show_hud_reply("Please say a full sentence."), 0)
                 return
 
             command = re.sub(rf"\b{WAKE_WORD}\b", "", input_text, flags=re.IGNORECASE).strip() or input_text
-            self.hud_controller.update(command, category="command", typing=True)
+            Clock.schedule_once(lambda dt: self.hud_controller.update(command, category="command", typing=True), 0)
             command_lower = command.lower().strip()
 
             # === Mode controls ===
@@ -137,41 +137,38 @@ class LavisCore:
             if "activate master control" in command_lower:
                 self.control_mode = "master_control"
                 self.hud_speak("Master control activated. You can now control screen and apps only.")
-                update_hud_status("Master Control")
+                Clock.schedule_once(lambda dt: update_hud_status("Master Control"), 0)
                 return
 
             if "deactivate master control" in command_lower:
                 self.control_mode = "normal"
                 self.hud_speak("Master control deactivated. Full assistant is back online.")
-                update_hud_status("Online")
+                Clock.schedule_once(lambda dt: update_hud_status("Online"), 0)
                 return
 
             if "activate restricted mode" in command_lower:
                 self.control_mode = "restricted"
                 self.hud_speak("Restricted mode activated. Only apps and file explorer are allowed.")
-                update_hud_status("Restricted")
+                Clock.schedule_once(lambda dt: update_hud_status("Restricted"), 0)
                 return
 
             if "deactivate restricted mode" in command_lower:
                 self.control_mode = "normal"
                 self.hud_speak("Restricted mode deactivated.")
-                update_hud_status("Online")
+                Clock.schedule_once(lambda dt: update_hud_status("Online"), 0)
                 return
 
-            # === Offline hardcoded command match ===
-            from LAVIS.jarvis.nlp.intent_detector import match_hardcoded_command, resolve_app_name
             offline_handler = match_hardcoded_command(command_lower)
             if offline_handler:
                 offline_handler()
-                show_hud_reply("Offline command matched.")
+                Clock.schedule_once(lambda dt: show_hud_reply("Offline command matched."), 0)
                 return
 
-            # === Control mode limits ===
             if self.control_mode == "master_control":
                 from LAVIS.jarvis.master_controll.command_handler import handle_voice_command
                 if handle_voice_command(command): return
                 if handle_explorer(command):
-                    show_hud_reply("Handled file explorer command.")
+                    Clock.schedule_once(lambda dt: show_hud_reply("Handled file explorer command."), 0)
                     return
                 self.hud_speak("Command not allowed in master control mode.")
                 return
@@ -180,70 +177,68 @@ class LavisCore:
                 if command.startswith("open "):
                     app_name = self.extract_app_name(command)
                     if app_name and open_windows_app(app_name):
-                        show_hud_reply(f"Opening {app_name}")
+                        Clock.schedule_once(lambda dt: show_hud_reply(f"Opening {app_name}"), 0)
                     else:
                         self.hud_speak(f"Restricted: Failed to open {app_name}")
                     return
                 elif handle_explorer(command):
-                    show_hud_reply("Handled file explorer command.")
+                    Clock.schedule_once(lambda dt: show_hud_reply("Handled file explorer command."), 0)
                     return
                 self.hud_speak("Command not allowed in restricted mode.")
                 return
 
-            # === Intent classification ===
-            from LAVIS.jarvis.nlp.intent_detector import detect_intent
             intent = detect_intent(command)
             print(f"🧠 Intent Detected: {intent}")
 
             if intent == "command":
-                from LAVIS.jarvis.commands.commands import handle_command
                 handled = handle_command(command)
                 app_name = self.extract_app_name(command) or resolve_app_name(command)
                 if app_name and open_windows_app(app_name):
-                    show_hud_reply(f"Opening {app_name}")
+                    Clock.schedule_once(lambda dt: show_hud_reply(f"Opening {app_name}"), 0)
                     return
                 if handled:
-                    show_hud_reply("Executed system command.")
+                    Clock.schedule_once(lambda dt: show_hud_reply("Executed system command."), 0)
                     return
-                self.hud_speak(f"Sorry sir, I couldn't process the command: {command}")
+                self.hud_speak(f"Sorry, I couldn't process the command: {command}")
                 return
 
             if intent == "input_control" and handle_input_control(command):
-                show_hud_reply("Handled input control.")
+                Clock.schedule_once(lambda dt: show_hud_reply("Handled input control."), 0)
                 return
 
             if intent == "explorer" and handle_explorer(command):
-                show_hud_reply("Handled file explorer command.")
+                Clock.schedule_once(lambda dt: show_hud_reply("Handled file explorer command."), 0)
                 return
 
             if intent == "network":
                 from LAVIS.jarvis.commands.network_bluetooth import handle_network_bluetooth
                 if handle_network_bluetooth(command):
-                    show_hud_reply("Network/Bluetooth command handled.")
+                    Clock.schedule_once(lambda dt: show_hud_reply("Network/Bluetooth command handled."), 0)
                     return
 
+            # === Natural language ===
             if intent == "conversation":
-                show_hud_reply("Let me think about that...")
+                Clock.schedule_once(lambda dt: show_hud_reply("Let me think about that..."), 0)
                 def run_fallback():
                     try:
-                        from LAVIS.jarvis.web.fallback import handle_fallback
                         response = handle_fallback(command)
                         self.session_state = "normal"
-                        if isinstance(response, str) and response.strip():
-                            self.hud_controller.update(response, category="reply", typing=True)
+                        if response:
+                            Clock.schedule_once(lambda dt: self.hud_controller.update(response, category="reply", typing=True), 0)
                     except Exception as e:
                         print(f"[Fallback Error] {e}")
                 threading.Thread(target=run_fallback, daemon=True).start()
                 return
 
             # Default fallback
-            show_hud_reply("Trying to find an answer...")
+            Clock.schedule_once(lambda dt: show_hud_reply("Trying to find an answer..."), 0)
             def run_final_fallback():
                 try:
-                    from LAVIS.jarvis.web.fallback import handle_fallback
                     response = handle_fallback(command)
                     self.session_state = "normal"
-                    self.hud_controller.update(response or "Sorry, I couldn't find a response.", category="reply", typing=True)
+                    Clock.schedule_once(lambda dt: self.hud_controller.update(
+                        response or "Sorry, I couldn't find a response.",
+                        category="reply", typing=True), 0)
                 except Exception as e:
                     print(f"[Fallback Error] {e}")
             threading.Thread(target=run_final_fallback, daemon=True).start()
@@ -259,31 +254,28 @@ class LavisRunner:
         try:
             if not os.path.exists("jarvis.sqlite3"):
                 train_chatbot()
-
             get_start_menu_apps(force_reload=True)
             self.core.welcome()
             start_background_listening()
-
             while True:
                 try:
                     if not command_queue.empty():
                         input_text = command_queue.get()
-                        self.core.hud_controller.type_live_text(input_text)
+                        Clock.schedule_once(lambda dt: self.core.hud_controller.type_live_text(input_text), 0)
                         print("🎤 Heard:", input_text)
                         self.core.handle_input(input_text)
                     else:
                         time.sleep(0.1)
                 except Exception as e:
                     logging.exception("⚠️ Runtime error in main loop:")
-                    update_hud_text(str(e), category="error")
+                    Clock.schedule_once(lambda dt: update_hud_text(str(e), category="error"), 0)
                     speak("Something went wrong during input processing.")
-
         except KeyboardInterrupt:
             stop_background_listening()
             self.core.hud_speak("Jarvis shutting down.")
         except Exception as e:
             logging.exception("❌ Error in outer main loop:")
-            update_hud_text(str(e), category="error")
+            Clock.schedule_once(lambda dt: update_hud_text(str(e), category="error"), 0)
             speak("Something went wrong.")
 
 def main():
