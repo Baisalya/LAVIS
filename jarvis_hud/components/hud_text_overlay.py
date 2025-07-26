@@ -111,18 +111,19 @@ class HUDTextOverlay(FloatLayout):
 
 # ✅ Updated HUDInterface wrapper to expose `text_overlay`
 from kivy.uix.boxlayout import BoxLayout
+from .hud_text_overlay import HUDTextOverlay
+from .hud_controller import HUDController
 
 class HUDInterface(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
         self.text_overlay = HUDTextOverlay()
+        self.controller = HUDController(self)  # ✅ Reuse single controller
         self.add_widget(self.text_overlay)
 
     def update_text(self, message, category="info", typing=False):
-        from .hud_controller import HUDController
-        controller = HUDController(self)
-        controller.update(message, category, typing)
+        self.controller.update(message, category, typing)
 
     def update_status(self, new_status):
         self.text_overlay.highlight_temp_text(f"[STATUS] {new_status}")

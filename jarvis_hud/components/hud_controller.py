@@ -1,3 +1,4 @@
+#hud_controller.py
 import time
 import threading
 import re
@@ -39,13 +40,16 @@ class HUDController:
 
         print(f"🧪 HUD[{category}] >> {formatted}")
 
-        try:
-            if typing and len(clean_text) > 10:
-                self._type_out_combo(clean_text, formatted)
-            else:
-                self.overlay.append_message(formatted)
-        except Exception as e:
-            print(f"[HUDController Error] update(): {e}")
+        def safe_update(dt):
+            try:
+                if typing and len(clean_text) > 10:
+                    self._type_out_combo(clean_text, formatted)
+                else:
+                    self.overlay.append_message(formatted)
+            except Exception as e:
+                print(f"[HUDController Error] update (UI thread): {e}")
+
+        Clock.schedule_once(safe_update, 0)
 
     def type_live_text(self, partial_text: str):
         try:
@@ -74,9 +78,6 @@ class HUDController:
                     print(f"[HUDController Error] typer(): {e}")
 
         threading.Thread(target=typer, daemon=True).start()
-
-    def speak(self, text, category="info", typing=False):
-        self.update(text, category, typing)
 
     def raw(self, text: str, replace_last=False):
         try:
