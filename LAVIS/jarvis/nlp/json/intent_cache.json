@@ -284,5 +284,7 @@
   "activate monster hunter mode": "command",
   "on on much darker": "command",
   "jordan on or": "command",
-  "i'm back": "conversation"
+  "i'm back": "conversation",
+  "who easier create": "learning",
+  "are you": "conversation"
 }
