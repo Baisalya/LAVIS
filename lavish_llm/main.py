@@ -10,7 +10,8 @@ from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
 from langchain.memory import ConversationBufferMemory
 from langchain_community.llms import HuggingFacePipeline
-from langchain_tools.python_tool import PythonREPLTool
+from langchain_experimental.tools import PythonREPLTool
+
 
 from langchain.tools.file_management import ReadFileTool, WriteFileTool
 from apscheduler.schedulers.background import BackgroundScheduler
