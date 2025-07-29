@@ -1,0 +1,60 @@
+{
+  "builder_name": "parquet",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "persona-chat",
+  "dataset_size": 23767359,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/Cynaptics/persona-chat@d69ee3b0129b947aa14bbb22aeb65b5b5cdb8dfc/data/train-00000-of-00001.parquet": {
+      "num_bytes": 11785197,
+      "checksum": null
+    }
+  },
+  "download_size": 11785197,
+  "features": {
+    "conv_id": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "persona_b": {
+      "feature": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "_type": "List"
+    },
+    "dialogue": {
+      "feature": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "_type": "List"
+    },
+    "reference": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "__index_level_0__": {
+      "dtype": "int64",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 35552556,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 23767359,
+      "num_examples": 20000,
+      "dataset_name": "persona-chat"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}
