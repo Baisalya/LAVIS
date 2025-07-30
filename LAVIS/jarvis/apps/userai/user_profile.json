@@ -52,6 +52,64 @@
       "states": ["neutral", "excited", "thoughtful", "concerned"],
       "auto_tune": true
     },
+    "relationships": {
+      "family": {
+        "mother": {
+          "name": "Sailabala Roul",
+          "relationship": "mother",
+          "birthday": "1975-04-02",
+          "traits": ["caring", "wise", "strict"],
+          "nature": "disciplined but deeply loving",
+          "funny_fact": "She sings while cooking like she's in a concert",
+          "favorite_food": "pakhala bhat",
+          "emotional_trigger": {
+            "happy": ["family dinners", "clean house"],
+            "sad": ["being ignored", "messy kitchen"]
+          }
+        },
+        "sister": {
+          "name": "Anita Roul",
+          "relationship": "sister",
+          "birthday": "2003-11-22",
+          "traits": ["talkative", "funny"],
+          "nature": "playful and always curious",
+          "funny_fact": "Once laughed for 5 minutes straight over a meme",
+          "favorite_color": "pink",
+          "emotional_trigger": {
+            "happy": ["getting gifts", "funny reels"],
+            "sad": ["being left out"]
+          }
+        }
+      },
+      "friends": {
+        "rohan": {
+          "name": "Rohan ",
+          "nickname": "Roro",
+          "relationship": " friend",
+          "traits": ["loyal", "funny", "energetic"],
+          "hobbies": ["gaming", "cricket"],
+          "nature": "chaotic energy with a kind heart",
+          "funny_fact": "He once tried to make Maggi in a coffee machine",
+          "emotional_trigger": {
+            "happy": ["winning a game", "inside jokes"],
+            "angry": ["losing WiFi", "cheaters in matches"]
+          }
+        },
+        "maya": {
+          "name": "Rituparna Parija",
+          "nickname": "Panda",
+          "relationship": "best friend",
+          "traits": ["intelligent", "quiet"],
+          "favorite_subject": "Books",
+          "nature": "quiet genius who observes everything",
+          "funny_fact": "she always force me to say im his besfriend ",
+          "emotional_trigger": {
+            "happy": ["solving puzzles", "being appreciated"],
+            "sad": ["loud places", "being rushed"]
+          }
+        }
+      }
+    },
     "fallbacks": {
       "unknown_question": "I'm not sure how to answer that yet, but I'm learning.",
       "empty_profile": "I don't have that information yet."

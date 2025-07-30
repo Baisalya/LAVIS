@@ -5,6 +5,7 @@ import shutil
 import json
 import time
 import requests
+from LAVIS.jarvis.apps.userai.user_profile import load_user_profile, build_system_prompt
 
 def load_config(config_file="config.json"):
     if os.path.exists(config_file):
@@ -20,15 +21,19 @@ def is_connected():
         return False
 # llm_integration/ollama_utils.py
 
-import requests
-import json
+
 
 def ask_ollama(prompt: str, model: str = "tinyllama") -> str:
     try:
+        # 🔁 Load latest profile & build system prompt
+        profile = load_user_profile()
+        system_context = build_system_prompt(profile)
+
+        full_prompt = f"{system_context.strip()}\n\nUser said: {prompt.strip()}\nRespond as Jarvis."
+
         response = requests.post(
             "http://localhost:11434/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False},
-            timeout=15
+            json={"model": model, "prompt": full_prompt, "stream": False},
         )
 
         if response.status_code != 200:

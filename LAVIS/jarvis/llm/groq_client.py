@@ -1,14 +1,18 @@
 import requests
 import json
+from LAVIS.jarvis.apps.userai.user_profile import load_user_profile, build_system_prompt
 
-# ✅ Your actual Groq API key (safe for local use; do NOT commit to GitHub)
 GROQ_API_KEY = "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"
-GROQ_MODEL = "llama3-70b-8192"  # ✅ Recommended
+GROQ_MODEL = "llama3-70b-8192"
 
 def ask_groq(prompt: str) -> str:
     if not GROQ_API_KEY:
         print("❌ Groq API key not set.")
         return None
+
+    # 🔁 Load latest profile & build system context dynamically
+    profile = load_user_profile()
+    system_context = build_system_prompt(profile)
 
     try:
         response = requests.post(
@@ -19,7 +23,10 @@ def ask_groq(prompt: str) -> str:
             },
             json={
                 "model": GROQ_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [
+                    {"role": "system", "content": system_context},
+                    {"role": "user", "content": prompt}
+                ],
                 "temperature": 0.7
             },
             timeout=15
@@ -31,11 +38,6 @@ def ask_groq(prompt: str) -> str:
             return None
 
         data = response.json()
-        if "choices" not in data or not data["choices"]:
-            print("❌ Groq API returned no choices:")
-            print(json.dumps(data, indent=2))
-            return None
-
         return data["choices"][0]["message"]["content"].strip()
 
     except Exception as e:

@@ -1,11 +1,15 @@
 import os
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+import sys
 import datetime
 import webbrowser
 
+# Fix TF warning for some environments
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+
+# === Imports ===
 from apscheduler.schedulers.background import BackgroundScheduler
 from celery import Celery
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 import chromadb
 from chromadb.utils import embedding_functions
 
@@ -13,15 +17,14 @@ from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
 from langchain.memory import ConversationBufferMemory
 from langchain_experimental.tools import PythonREPLTool
-from langchain_community.tools import ReadFileTool, WriteFileTool
+from langchain_community.tools import ReadFileTool  # Updated import
+# from langchain_community.tools import WriteFileTool  # ❌ Not supported in ZERO_SHOT_REACT
 
-import sys
-import os
+# Add parent directory to import LLM wrappers
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from LAVIS.jarvis.llm.llm_wrappers import GroqLLM, OllamaLLM
 
-# === Utility Functions ===
+# === Utilities ===
 def get_time():
     return f"Current time is: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
@@ -29,7 +32,7 @@ def open_website(url):
     webbrowser.open(url)
     return f"Opening {url}"
 
-# === Memory ===
+# === Memory Store ===
 class MemoryStore:
     def __init__(self):
         self.client = chromadb.Client()
@@ -48,14 +51,6 @@ class MemoryStore:
         return results.get("documents", [[]])[0]
 
 # === Knowledge Loader ===
-from datasets import load_dataset
-
-import os
-from datasets import load_dataset, load_from_disk, DatasetDict
-
-import os
-from datasets import load_dataset, load_from_disk
-
 class KnowledgeLoader:
     def __init__(self, cache_dir="datasets"):
         self.knowledge_chunks = []
@@ -67,12 +62,11 @@ class KnowledgeLoader:
         if os.path.exists(local_path):
             print(f"📂 Loading from cache: {local_path}")
             return load_from_disk(local_path)
-        else:
-            print(f"⬇️ Downloading {dataset_name} from Hugging Face...")
-            dataset = load_dataset(dataset_name, name=config_name, split=split, **kwargs)
-            dataset.save_to_disk(local_path)
-            print(f"✅ Saved to: {local_path}")
-            return dataset
+        print(f"⬇️ Downloading {dataset_name} from Hugging Face...")
+        dataset = load_dataset(dataset_name, name=config_name, split=split, **kwargs)
+        dataset.save_to_disk(local_path)
+        print(f"✅ Saved to: {local_path}")
+        return dataset
 
     def load_general_knowledge(self):
         wiki = self._load_or_cache_dataset(
@@ -131,7 +125,7 @@ class KnowledgeLoader:
         self.load_commonsense()
         self.load_code_knowledge()
         self.load_emotional_knowledge()
-        return self.knowledge_chunks[:500]
+        return self.knowledge_chunks[:100]  # ⬅️ Reduce for token safety
 
 # === Celery Task ===
 celery_app = Celery('jarvis_tasks', broker='redis://localhost:6379/0')
@@ -156,9 +150,9 @@ class LLMEngine:
         else:
             raise ValueError(f"Unsupported LLM backend: {backend}")
 
-# === Main ===
+# === Main Logic ===
 def main():
-    llm_engine = LLMEngine(backend="groq")  # ← Change to "ollama" if needed
+    llm_engine = LLMEngine(backend="ollama")  # ← change to "ollama" if needed
     memory = MemoryStore()
     knowledge = KnowledgeLoader().load_all()
 
@@ -167,8 +161,8 @@ def main():
             Tool(name="Get Time", func=get_time, description="Gets the current time"),
             Tool(name="Open Google", func=lambda: open_website("https://www.google.com"), description="Opens Google"),
             PythonREPLTool(),
-            ReadFileTool(),
-            #WriteFileTool()
+            ReadFileTool()
+            # WriteFileTool() ← not supported with ZeroShot agent
         ],
         llm=llm_engine.llm,
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
@@ -187,9 +181,12 @@ def main():
             print("\n🧠 Memory Match:", mem_hits)
 
         context_prompt = f"Answer using available knowledge. Knowledge base: {knowledge}\nUser: {user_input}"
-        response = agent.run(context_prompt)
-        print("Jarvis:", response)
-        memory.add_memory(user_input, response)
+        try:
+            response = agent.run(context_prompt)
+            print("Jarvis:", response)
+            memory.add_memory(user_input, response)
+        except Exception as e:
+            print("⚠️ LLM error:", e)
 
 if __name__ == "__main__":
     main()

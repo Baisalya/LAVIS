@@ -11,7 +11,7 @@ from LAVIS.jarvis.network import is_connected
 from LAVIS.jarvis.voice.recognizer import resume_listening, set_session_mode
 from LAVIS.hud_display import show_fallback_in_hud
 from LAVIS.jarvis.nlp.intent_detector import detect_intent
-from LAVIS.jarvis.apps.userai.user_profile import load_user_profile, answer_about_user
+from LAVIS.jarvis.apps.userai.user_profile import load_user_profile, answer_about_user, build_system_prompt
 
 last_fallback_response = None
 
@@ -33,7 +33,7 @@ def load_config():
         print(f"⚠️ Failed to load config.json: {e}")
         return {
             "fallback_priority": ["groq", "ollama", "wikipedia", "duckduckgo", "chatbot"],
-            "fallback_auto_converse": False
+            "fallback_auto_converse": True
         }
 
 def search_wikipedia(query):
@@ -59,20 +59,33 @@ def handle_fallback(command: str) -> str:
         if not command.strip():
             return "Please say something for me to help."
 
-        # STEP 1: Check for profile-based personal answer
         from LAVIS.jarvis.nlp.intent_detector import is_personal_query
         if hasattr(profile, "get") and is_personal_query(command):
             print("🔁 Routing to: Profile Answer")
-            answer = answer_about_user(command, profile)
-            if answer:
-                last_fallback_response = answer
-                show_fallback_in_hud(answer)
-                human_speak(answer)
+            profile_answer = answer_about_user(command, profile)
+
+            if profile_answer:
+                system_prompt = build_system_prompt(profile)
+                combined_prompt = f"{system_prompt}\n\nUser asked: {command}\nHere is the known fact: {profile_answer}\nRespond naturally as Jarvis."
+
+                config = load_config()
+                llm_method = config.get("fallback_priority", ["groq"])[0]
+
+                if llm_method == "groq":
+                    jarvis_reply = ask_groq(combined_prompt, system_prompt="")
+                elif llm_method == "ollama":
+                    jarvis_reply = ask_ollama(combined_prompt, system_prompt="")
+                else:
+                    jarvis_reply = profile_answer
+
+                last_fallback_response = jarvis_reply
+                show_fallback_in_hud(jarvis_reply)
+                print("🗣️ Speaking (profile):", jarvis_reply)
+                human_speak(jarvis_reply)
                 resume_listening()
                 set_session_mode(False)
-                return answer
+                return jarvis_reply
 
-        # STEP 2: LLM/Web/Chatbot fallback
         intent = detect_intent(command)
         emotion = detect_emotion(command)
         mood = profile.get("personality_traits", {}).get("mood", "neutral")
@@ -84,7 +97,7 @@ def handle_fallback(command: str) -> str:
         config = load_config()
         fallback_order = config.get("fallback_priority", [])
         auto_converse = config.get("fallback_auto_converse", False)
-        auto_read = emotion == "negative"
+        auto_read = True
 
         set_session_mode(True)
         print("🧠 Session mode: ON")
@@ -114,12 +127,11 @@ def handle_fallback(command: str) -> str:
                     cleaned = response.lower().strip()
                     if any(bad in cleaned for bad in BAD_RESPONSES):
                         print(f"⚠️ Rejected weak response from {method}")
-
-                        # 🔁 Try user profile
                         print("🧠 Attempting profile-based answer fallback...")
                         profile_response = answer_about_user(command, profile)
                         if profile_response:
                             show_fallback_in_hud(profile_response)
+                            print("🗣️ Speaking (fallback profile):", profile_response)
                             human_speak(profile_response)
                             resume_listening()
                             set_session_mode(False)
@@ -128,8 +140,8 @@ def handle_fallback(command: str) -> str:
 
                     last_fallback_response = response
                     show_fallback_in_hud(response)
-                    if auto_read or auto_converse:
-                        human_speak(response)
+                    print("🗣️ Speaking (LLM):", response)
+                    human_speak(response)
                     if auto_converse:
                         resume_listening()
                         set_session_mode(False)
