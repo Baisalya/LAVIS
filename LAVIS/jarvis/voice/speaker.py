@@ -1,18 +1,17 @@
-# speaker.py (TTS Manager - Optimized)
+# speaker.py (patched)
 import asyncio
 import threading
 import io
 import edge_tts
 from pydub import AudioSegment
-from pydub.playback import play
 import pyttsx3
-from LAVIS.jarvis.network import is_connected
+import pyaudio
 import random
 import time
 
-from LAVIS.jarvis.voice.recognizer import set_last_spoken_text
+from LAVIS.jarvis.network import is_connected
+from LAVIS.jarvis.voice.recognizer import set_last_spoken_text, pause_listening, resume_listening
 
-# === Globals ===
 stop_speaking = False
 voice_name = "en-US-AriaNeural"
 engine = pyttsx3.init()
@@ -31,10 +30,35 @@ def speak_offline(text):
     try:
         print("🗣️ (offline)", text)
         set_last_spoken_text(text)
+        pause_listening()
         engine.say(text)
         engine.runAndWait()
     except Exception as e:
         print(f"🔇 Offline TTS error: {e}")
+    finally:
+        # ✅ Ensure mic resumes after speaking, no matter what
+        resume_listening()
+
+def play_interruptible(audio_segment):
+    global stop_speaking
+    p = pyaudio.PyAudio()
+    stream = p.open(
+        format=p.get_format_from_width(audio_segment.sample_width),
+        channels=audio_segment.channels,
+        rate=audio_segment.frame_rate,
+        output=True,
+    )
+
+    chunk_size = 1024
+    data = audio_segment.raw_data
+    for i in range(0, len(data), chunk_size):
+        if stop_speaking:
+            break
+        stream.write(data[i:i+chunk_size])
+
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
 
 def speak(text):
     global stop_speaking
@@ -63,7 +87,10 @@ def speak(text):
 
             if not stop_speaking:
                 try:
-                    play(audio)
+                    pause_listening()
+                    play_interruptible(audio)
+                    time.sleep(0.2)
+                    resume_listening()
                 except Exception as e:
                     print("🔊 Playback error:", e)
                     speak_offline(text)

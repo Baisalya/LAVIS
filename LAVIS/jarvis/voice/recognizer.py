@@ -1,3 +1,4 @@
+#recognizer.py
 import os
 import json
 import time
@@ -38,11 +39,14 @@ _in_session = False
 _indicator_thread = None
 _listener_thread = None
 stop_listening = None
+
 last_spoken_text = ""
+last_spoken_time = 0
 
 def set_last_spoken_text(text):
-    global last_spoken_text
+    global last_spoken_text, last_spoken_time
     last_spoken_text = text.lower().strip()
+    last_spoken_time = time.time()
 
 os.environ["VOSK_LOG_LEVEL"] = "0"
 command_model = Model(COMMAND_MODEL_PATH)
@@ -72,15 +76,18 @@ def set_session_mode(active: bool):
 
 def pause_listening():
     global _paused
-    _paused = True
-    append_hud_console("⏸️ Listening paused.")
-    _update_hud_text("⏸️ Listening paused 🎙️")
+    if not _paused:
+        _paused = True
+        append_hud_console("⏸️ Listening paused.")
+        _update_hud_text("⏸️ Listening paused 🎙️")
 
 def resume_listening():
     global _paused
-    _paused = False
-    append_hud_console("▶️ Listening resumed.")
-    _update_hud_text("🟢 Listening resumed 🎙️")
+    if _paused:
+        print("🔊 Resuming listening...")
+        _paused = False
+        append_hud_console("▶️ Listening resumed.")
+        _update_hud_text("🟢 Listening resumed 🎙️")
 
 def toggle_auth(enabled: bool):
     global AUTHENTICATION_ENABLED
@@ -139,10 +146,6 @@ def _vosk_listen_loop():
         controller = get_hud_controller()
 
         while _listening:
-            if _paused:
-                time.sleep(0.1)
-                continue
-
             try:
                 data = audio_stream.read(2000, exception_on_overflow=False)
             except Exception as e:
@@ -154,6 +157,21 @@ def _vosk_listen_loop():
                 controller.hud.mic_controller.update_level(rms_level)
 
             now = time.time()
+
+            # ✅ NEW: Handle stop speech even when paused
+            if _paused:
+                try:
+                    partial_result = json.loads(freeform_recognizer.PartialResult())
+                    partial = partial_result.get("partial", "").strip().lower()
+                    if partial in ["stop", "stop it", "cancel"]:
+                        append_hud_console("🛑 Voice stop detected while paused.")
+                        from LAVIS.jarvis.voice.speaker import stop_speech
+                        stop_speech()
+                        set_last_spoken_text("")
+                except Exception:
+                    pass
+                time.sleep(0.1)
+                continue
 
             if command_recognizer.AcceptWaveform(data):
                 try:
@@ -178,6 +196,13 @@ def _vosk_listen_loop():
                     query = result.get("text", "").strip().lower()
                     if fuzz.ratio(query, last_spoken_text) > 85:
                         continue
+                    if query in ["mute","enough", "stop it", "cancel"]:
+                        append_hud_console("🛑 Voice stop detected (freeform).")
+                        from LAVIS.jarvis.voice.speaker import stop_speech
+                        stop_speech()
+                        set_last_spoken_text("")
+                        continue
+
                     if query:
                         set_session_mode(True)
                         if controller:

@@ -81,7 +81,7 @@ def handle_fallback(command: str) -> str:
                 last_fallback_response = jarvis_reply
                 show_fallback_in_hud(jarvis_reply)
                 print("🗣️ Speaking (profile):", jarvis_reply)
-                human_speak(jarvis_reply)
+                #human_speak(jarvis_reply)
                 resume_listening()
                 set_session_mode(False)
                 return jarvis_reply

@@ -23,6 +23,9 @@ def load_user_profile(filename="user_profile.json") -> dict:
     return {}
 
 def answer_about_user(query: str, profile: dict) -> str | None:
+    from fuzzywuzzy import fuzz
+    import re
+
     query = query.lower()
     keywords = set(re.findall(
         r"\b(name|nickname|age|birthday|dob|creator|created|father|who made you|who created you|made you|loyal|loyalty|color|favourite|favorite|live|location|hobby|photo|image|picture|purpose|version|yourself|jarvis|who|you|do you do|abilities|what can you do|personality|goal|how old|mood|trait|quirk|emotion|feeling|last interaction|recent|command|friend|family|mother|father|sister|brother|cousin|nature|funny fact)\b",
@@ -104,6 +107,7 @@ def answer_about_user(query: str, profile: dict) -> str | None:
         return f"My emotion engine is {'active' if engine.get('active') else 'inactive'}, state: {engine.get('default_state', 'neutral')}"
 
     relationships = profile.get("relationships", {})
+    found_people = []
 
     def match_relationship(query: str, person_data: dict, person_name: str) -> bool:
         name_in_query = person_name.lower() in query
@@ -124,11 +128,18 @@ def answer_about_user(query: str, profile: dict) -> str | None:
             parts.append(f"Their birthday is on {data['birthday']}")
         return " ".join(parts)
 
-    for group in relationships:
-        people = relationships[group]
+    for group, people in relationships.items():
         for key, person in people.items():
             if match_relationship(query, person, key) or match_relationship(query, person, person.get("name", "")):
                 return format_person_response(person)
+            if group in query or person.get("relationship", "").lower() in query:
+                found_people.append(person)
+
+    if found_people:
+        group_name = "friends" if "friend" in query else "family"
+        return "Here are your known " + group_name + ":\n" + "\n".join(
+            f"- {p.get('name')} ({p.get('nickname', 'no nickname')})" for p in found_people
+        )
 
     best_score = 0
     best_key = None
