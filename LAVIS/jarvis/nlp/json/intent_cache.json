@@ -309,5 +309,8 @@
   "milk cream": "input_control",
   "okay who your creator": "conversation",
   "you guys": "conversation",
-  "you love me": "conversation"
+  "you love me": "conversation",
+  "is heather": "explorer",
+  "it was": "conversation",
+  "it seems like you might say something else is cause or a all spread out": "conversation"
 }

@@ -1,4 +1,4 @@
-#recognizer.py
+# recognizer.py
 import os
 import json
 import time
@@ -14,9 +14,9 @@ from fuzzywuzzy import fuzz
 
 from jarvis_hud.components.hud_controller import HUDController
 from LAVIS.utils.hud_utils import get_hud_controller
-from LAVIS.jarvis.voice.auth.voice_auth import check_long_audio_for_match
+from LAVIS.jarvis.voice.auth.voice_auth import check_long_audio_for_match, is_tts_voice
 
-from LAVIS.jarvis.voice.auth.voice_auth import is_tts_voice  # ✅ Import once at the top of the function
+from LAVIS.jarvis.voice.controllers.watchdog import VoiceWatchdog  # ✅ modular watchdog
 
 try:
     from jarvis_hud.main import append_hud_console
@@ -40,6 +40,7 @@ _paused = False
 _in_session = False
 _indicator_thread = None
 _listener_thread = None
+_recognizer_watchdog = None
 stop_listening = None
 
 last_spoken_text = ""
@@ -124,8 +125,6 @@ def _vosk_listen_loop():
     p = None
 
     try:
-        from LAVIS.jarvis.voice.auth.voice_auth import is_tts_voice  # ✅ Import once at the top of the function
-
         p = pyaudio.PyAudio()
         audio_stream = p.open(
             format=pyaudio.paInt16,
@@ -152,12 +151,11 @@ def _vosk_listen_loop():
         while _listening:
             try:
                 data = audio_stream.read(2000, exception_on_overflow=False)
+            # ✅ Ignore TTS voice playback (assistant's own speech)
 
-                # ✅ Ignore TTS voice playback (assistant's own speech)
                 if is_tts_voice(data):
                     append_hud_console("🔇 Ignored own TTS voice.")
                     continue
-
             except Exception as e:
                 print(f"🔇 Audio read error: {e}")
                 continue
@@ -167,8 +165,8 @@ def _vosk_listen_loop():
                 controller.hud.mic_controller.update_level(rms_level)
 
             now = time.time()
-
             # ✅ Handle "stop" command even while paused
+
             if _paused:
                 try:
                     partial_result = json.loads(freeform_recognizer.PartialResult())
@@ -254,11 +252,24 @@ def _vosk_listen_loop():
         if p:
             p.terminate()
 
-# ✅ Enhanced recognizer.py (core logic unchanged, with auto-restart and recovery loop added)
-# (Only added to `start_background_listening`)
+# === Watchdog handlers ===
+def _recognizer_health_check():
+    try:
+        controller = get_hud_controller()
+        if controller and hasattr(controller.hud, "mic_controller"):
+            return controller.hud.mic_controller.current_level > 10
+    except Exception:
+        pass
+    return True
 
+def _recognizer_restart():
+    stop_background_listening()
+    time.sleep(0.5)
+    start_background_listening()
+
+# === Startup/shutdown ===
 def start_background_listening():
-    global _listening, _indicator_thread, _listener_thread, stop_listening
+    global _listening, _indicator_thread, _listener_thread, stop_listening, _recognizer_watchdog
 
     if _listening:
         append_hud_console("⚠️ Already listening.")
@@ -273,11 +284,10 @@ def start_background_listening():
                 _vosk_listen_loop()
             except Exception as e:
                 append_hud_console(f"💥 Listener crashed: {e}")
-                import traceback
                 traceback.print_exc()
-                time.sleep(1)  # brief pause to avoid tight loop crash spam
+                time.sleep(1)
             else:
-                break  # exit if the loop ended cleanly
+                break
 
     _indicator_thread = threading.Thread(target=_listening_indicator, daemon=True)
     _indicator_thread.start()
@@ -285,14 +295,18 @@ def start_background_listening():
     _listener_thread = threading.Thread(target=safe_vosk_loop, daemon=True)
     _listener_thread.start()
 
-    def stop():
-        global _listening
-        _listening = False
+    stop_listening = lambda: globals().__setitem__('_listening', False)
 
-    stop_listening = stop
+    _recognizer_watchdog = VoiceWatchdog(
+        name="Recognizer",
+        target_thread_func=lambda: _listener_thread,
+        health_check_func=_recognizer_health_check,
+        restart_func=_recognizer_restart
+    )
+    _recognizer_watchdog.start()
 
 def stop_background_listening():
-    global stop_listening, _indicator_thread, _listener_thread, audio_stream
+    global stop_listening, _indicator_thread, _listener_thread, audio_stream, _recognizer_watchdog
     _listening = False
 
     if stop_listening:
@@ -311,3 +325,6 @@ def stop_background_listening():
             audio_stream.close()
         except Exception:
             pass
+
+    if _recognizer_watchdog:
+        _recognizer_watchdog.stop()
