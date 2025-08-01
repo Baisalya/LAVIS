@@ -11,7 +11,7 @@ import time
 
 from LAVIS.jarvis.network import is_connected
 from LAVIS.jarvis.voice.recognizer import set_last_spoken_text, pause_listening, resume_listening
-from LAVIS.jarvis.voice.tts_guard import guard_microphone
+from LAVIS.jarvis.voice.controllers.tts_guard import guard_microphone
 
 try:
     from jarvis_hud.main import append_hud_console
