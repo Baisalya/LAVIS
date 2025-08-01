@@ -16,6 +16,8 @@ from jarvis_hud.components.hud_controller import HUDController
 from LAVIS.utils.hud_utils import get_hud_controller
 from LAVIS.jarvis.voice.auth.voice_auth import check_long_audio_for_match
 
+from LAVIS.jarvis.voice.auth.voice_auth import is_tts_voice  # ✅ Import once at the top of the function
+
 try:
     from jarvis_hud.main import append_hud_console
 except ImportError:
@@ -122,6 +124,8 @@ def _vosk_listen_loop():
     p = None
 
     try:
+        from LAVIS.jarvis.voice.auth.voice_auth import is_tts_voice  # ✅ Import once at the top of the function
+
         p = pyaudio.PyAudio()
         audio_stream = p.open(
             format=pyaudio.paInt16,
@@ -148,6 +152,12 @@ def _vosk_listen_loop():
         while _listening:
             try:
                 data = audio_stream.read(2000, exception_on_overflow=False)
+
+                # ✅ Ignore TTS voice playback (assistant's own speech)
+                if is_tts_voice(data):
+                    append_hud_console("🔇 Ignored own TTS voice.")
+                    continue
+
             except Exception as e:
                 print(f"🔇 Audio read error: {e}")
                 continue
@@ -158,7 +168,7 @@ def _vosk_listen_loop():
 
             now = time.time()
 
-            # ✅ NEW: Handle stop speech even when paused
+            # ✅ Handle "stop" command even while paused
             if _paused:
                 try:
                     partial_result = json.loads(freeform_recognizer.PartialResult())
@@ -196,7 +206,7 @@ def _vosk_listen_loop():
                     query = result.get("text", "").strip().lower()
                     if fuzz.ratio(query, last_spoken_text) > 85:
                         continue
-                    if query in ["mute","enough", "stop it", "cancel"]:
+                    if query in ["mute", "enough", "stop it", "cancel"]:
                         append_hud_console("🛑 Voice stop detected (freeform).")
                         from LAVIS.jarvis.voice.speaker import stop_speech
                         stop_speech()
@@ -244,6 +254,9 @@ def _vosk_listen_loop():
         if p:
             p.terminate()
 
+# ✅ Enhanced recognizer.py (core logic unchanged, with auto-restart and recovery loop added)
+# (Only added to `start_background_listening`)
+
 def start_background_listening():
     global _listening, _indicator_thread, _listener_thread, stop_listening
 
@@ -254,10 +267,22 @@ def start_background_listening():
     append_hud_console("🎤 Starting background listening...")
     _listening = True
 
+    def safe_vosk_loop():
+        while _listening:
+            try:
+                _vosk_listen_loop()
+            except Exception as e:
+                append_hud_console(f"💥 Listener crashed: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(1)  # brief pause to avoid tight loop crash spam
+            else:
+                break  # exit if the loop ended cleanly
+
     _indicator_thread = threading.Thread(target=_listening_indicator, daemon=True)
     _indicator_thread.start()
 
-    _listener_thread = threading.Thread(target=_vosk_listen_loop, daemon=True)
+    _listener_thread = threading.Thread(target=safe_vosk_loop, daemon=True)
     _listener_thread.start()
 
     def stop():

@@ -2,6 +2,7 @@ import os
 import torch
 import torchaudio
 import traceback
+import numpy as np
 from speechbrain.inference import SpeakerRecognition
 
 # === Load speaker model once ===
@@ -20,8 +21,8 @@ def save_embedding_from_long_file(wav_path=ENROLLED_WAV, duration_per_chunk=3, s
     try:
         signal, fs = torchaudio.load(wav_path)
 
-        chunk_samples = int(duration_per_chunk * fs)        # e.g., 3 sec
-        stride_samples = int(stride * fs)                   # e.g., 1.5 sec overlap
+        chunk_samples = int(duration_per_chunk * fs)
+        stride_samples = int(stride * fs)
 
         total_samples = signal.shape[1]
         if total_samples < chunk_samples:
@@ -81,7 +82,10 @@ def is_authenticated_from_bytes(pcm_bytes: bytes, threshold=0.65):
     try:
         enrolled_embedding = load_embedding()
 
-        waveform = torch.frombuffer(pcm_bytes, dtype=torch.int16).float() / 32768.0
+        waveform = torch.tensor(
+            np.frombuffer(pcm_bytes, dtype=np.int16).copy(),
+            dtype=torch.float32
+        ) / 32768.0
         waveform = waveform.unsqueeze(0)
 
         if waveform.shape[1] < 16000:
@@ -106,8 +110,11 @@ def check_long_audio_for_match(pcm_bytes: bytes, threshold=0.65, chunk_size=1600
     try:
         enrolled_embedding = load_embedding()
 
-        waveform = torch.frombuffer(pcm_bytes, dtype=torch.int16).float() / 32768.0
-        waveform = waveform.unsqueeze(0)  # [1, N]
+        waveform = torch.tensor(
+            np.frombuffer(pcm_bytes, dtype=np.int16).copy(),
+            dtype=torch.float32
+        ) / 32768.0
+        waveform = waveform.unsqueeze(0)
         total_samples = waveform.shape[1]
 
         if total_samples < chunk_size:
@@ -137,4 +144,34 @@ def check_long_audio_for_match(pcm_bytes: bytes, threshold=0.65, chunk_size=1600
     except Exception:
         print("🚨 Error in long audio checking:")
         traceback.print_exc()
+        return False
+
+
+# === Detect if audio matches assistant's own TTS voice ===
+def is_tts_voice(pcm_bytes: bytes, threshold=0.8) -> bool:
+    """
+    Returns True if the audio appears to match the assistant's own TTS voice.
+    Used to ignore its own speech.
+    """
+    try:
+        enrolled_embedding = load_embedding()
+
+        waveform = torch.tensor(
+            np.frombuffer(pcm_bytes, dtype=np.int16).copy(),
+            dtype=torch.float32
+        ) / 32768.0
+        waveform = waveform.unsqueeze(0)
+
+        if waveform.shape[1] < 16000:
+            return False
+
+        if waveform.shape[1] > 16000:
+            waveform = waveform[:, :16000]
+
+        test_embedding = auth_model.encode_batch(waveform).squeeze(1)
+        score = torch.nn.functional.cosine_similarity(enrolled_embedding, test_embedding).item()
+        print(f"🎙️ TTS voice similarity: {score:.4f}")
+        return score >= threshold
+    except Exception as e:
+        print(f"[TTS Voice Check Error] {e}")
         return False
