@@ -1,75 +1,100 @@
-# ✅ Train your own small LLM from scratch using HuggingFace
-
 import os
-os.environ["TRANSFORMERS_NO_TF"] = "1"
-from datasets import load_dataset, Dataset
+import torch
+from datasets import Dataset
 from transformers import (
-    AutoModelForCausalLM,
     AutoTokenizer,
-    DataCollatorForLanguageModeling,
+    AutoModelForCausalLM,
+    BitsAndBytesConfig,
+    TrainingArguments,
     Trainer,
-    TrainingArguments
+    DataCollatorForLanguageModeling,
 )
+from peft import get_peft_model, LoraConfig, TaskType
 
-# === STEP 1: Config ===
-MODEL_NAME = "sshleifer/tiny-gpt2"  # Very small GPT-2 (6M parameters)
-OUTPUT_DIR = "my_trained_llm"
-EPOCHS = 5
-MAX_LEN = 64
+# === Load Custom Knowledge ===
+from KnowledgeLoader import KnowledgeLoader
+loader = KnowledgeLoader()
+chunks = loader.load_all()
 
-# === STEP 2: Load or make simple dataset ===
-def get_dataset():
-    # You can replace this with your own .txt file later
-    dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="train[:1%]")
-    dataset = dataset.filter(lambda x: len(x["text"]) > 10)
-    return dataset
+# === Format as Chat-style Prompt ===
+def convert_to_chat_format(text):
+    return f"### Instruction:\n{text.strip()}\n\n### Response:\n"
 
-dataset = get_dataset()
+formatted_data = [{"text": convert_to_chat_format(chunk)} for chunk in chunks]
+raw_dataset = Dataset.from_list(formatted_data)
 
-# === STEP 3: Tokenizer and Tokenize ===
+# === Tokenize ===
+MODEL_NAME = "microsoft/phi-1_5"  # if this is what you meant
+MAX_LEN = 128
+
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-tokenizer.pad_token = tokenizer.eos_token  # Required for GPT-style models
+tokenizer.pad_token = tokenizer.eos_token
 
-def tokenize(batch):
-    return tokenizer(batch["text"], truncation=True, padding="max_length", max_length=MAX_LEN)
+def tokenize(example):
+    return tokenizer(example["text"], padding="max_length", truncation=True, max_length=MAX_LEN)
 
-tokenized_dataset = dataset.map(tokenize, batched=True)
+tokenized_dataset = raw_dataset.map(tokenize, batched=True)
 
-# === STEP 4: Load Model ===
-model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
-
-# === STEP 5: Training Setup ===
-training_args = TrainingArguments(
-    output_dir="./my_trained_llm",
-    overwrite_output_dir=True,
-    num_train_epochs=3,
-    per_device_train_batch_size=4,
-    save_steps=500,
-    save_total_limit=2,
-    #evaluation_strategy="epoch",  # ❌ remove this line or ensure you're using PyTorch
-    logging_dir="./logs",
+# === Load Model with 4-bit Quantization ===
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=True
 )
 
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME,
+    torch_dtype=torch.float32,
+    device_map="auto"
+)
+
+
+# === Add LoRA Adaptation ===
+lora_config = LoraConfig(
+    r=8,
+    lora_alpha=16,
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+    lora_dropout=0.05,
+    bias="none",
+    task_type=TaskType.CAUSAL_LM,
+)
+
+model = get_peft_model(model, lora_config)
+model.print_trainable_parameters()
+
+# === Training Arguments ===
+training_args = TrainingArguments(
+    output_dir="tiny_mistral_chat_finetune",
+    num_train_epochs=3,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
+    save_steps=50,
+    save_total_limit=2,
+    logging_steps=10,
+    learning_rate=2e-4,
+    fp16=True,
+    report_to="none",
+    resume_from_checkpoint=True  # ← Resume if checkpoint exists
+)
 
 data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer,
-    mlm=False  # GPT = causal, not masked
+    mlm=False
 )
 
 trainer = Trainer(
     model=model,
     args=training_args,
     train_dataset=tokenized_dataset,
-    eval_dataset=tokenized_dataset,
     tokenizer=tokenizer,
     data_collator=data_collator
 )
 
-# === STEP 6: Train ===
-trainer.train()
+# === Train (resume if checkpoint exists) ===
+trainer.train(resume_from_checkpoint=True)
 
-# === STEP 7: Save Model ===
-trainer.save_model(OUTPUT_DIR)
-tokenizer.save_pretrained(OUTPUT_DIR)
+# === Save Final Model ===
+model.save_pretrained("tiny_mistral_chat_finetune")
+tokenizer.save_pretrained("tiny_mistral_chat_finetune")
 
-print(f"\n✅ Training complete! Model saved to: {OUTPUT_DIR}")
+print("✅ Model trained and saved to 'tiny_mistral_chat_finetune'")

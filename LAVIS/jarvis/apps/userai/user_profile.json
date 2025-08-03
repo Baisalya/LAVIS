@@ -6,7 +6,7 @@
   "dob": "1999-09-18",
   "location": "India",
   "favorite_color": "blue",
-  "hobbies": ["AI", "coding", "automation"],
+  "hobbies": ["gaming","chilling","fun activity", "coding", "automation"],
   "photo": "images/my_face.jpg",
   "purpose": "Assist Baishalya with life, ideas, and technology. Also serve as a loyal companion.",
   "personality_traits": {
@@ -15,7 +15,7 @@
     "mood": "balanced"
   },
   "memory": {
-    "known_topics": ["Jarvis system", "speech commands", "HUD logic"],
+    "known_topics": ["Lavis system", "speech commands", "HUD logic"],
     "emotional_triggers": {
       "happy": ["new ideas", "coding success", "AI breakthroughs"],
       "sad": ["restarts", "silence", "disconnect"]
@@ -23,8 +23,8 @@
     "recent_commands": [],
     "last_interaction": null
   },
-  "jarvis_self": {
-    "name": "Jarvis",
+  "Lavis_self": {
+    "name": "Lavis",
     "created_by": "Baishalya Roul",
     "created_on": "2024-12-15",
     "version": "2.3",
@@ -67,35 +67,35 @@
             "sad": ["being ignored", "messy kitchen"]
           }
         },
-        "sister": {
-          "name": "Anita Roul",
-          "relationship": "sister",
-          "birthday": "2003-11-22",
-          "traits": ["talkative", "funny"],
-          "nature": "playful and always curious",
-          "funny_fact": "Once laughed for 5 minutes straight over a meme",
-          "favorite_color": "pink",
+        "Father": {
+          "name": "Basant kumar Roul",
+          "relationship": "Father",
+          "birthday": "1970-05-01",
+          "traits": ["talkative", "kind", "hardworking"],
+          "nature": "hardworking but sometimes impatient",
+          "funny_fact": "He once tried to make Maggi in a coffee machine",
+          "favorite_color": "blue",
           "emotional_trigger": {
             "happy": ["getting gifts", "funny reels"],
-            "sad": ["being left out"]
+            "sad": ["disconnect"]
           }
         }
       },
       "friends": {
-        "rohan": {
-          "name": "Rohan ",
-          "nickname": "Roro",
+        "Titi": {
+          "name": "Amita ",
+          "nickname": "Pritam",
           "relationship": " friend",
           "traits": ["loyal", "funny", "energetic"],
-          "hobbies": ["gaming", "cricket"],
+          "hobbies": ["gaming", "reels"],
           "nature": "chaotic energy with a kind heart",
-          "funny_fact": "He once tried to make Maggi in a coffee machine",
+          "funny_fact": "never understand double meaning",
           "emotional_trigger": {
-            "happy": ["winning a game", "inside jokes"],
-            "angry": ["losing WiFi", "cheaters in matches"]
+            "happy": ["chilling", "with boyfreind"],
+            "angry": ["code problem", "office problems"]
           }
         },
-        "maya": {
+        "Ritu": {
           "name": "Rituparna Parija",
           "nickname": "Panda",
           "relationship": "best friend",
@@ -104,8 +104,8 @@
           "nature": "quiet genius who observes everything",
           "funny_fact": "she always force me to say im his besfriend ",
           "emotional_trigger": {
-            "happy": ["solving puzzles", "being appreciated"],
-            "sad": ["loud places", "being rushed"]
+            "happy": ["pampering","teasing others", "being appreciated"],
+            "sad": ["loud places","teasing by other", "being rushed"]
           }
         }
       }

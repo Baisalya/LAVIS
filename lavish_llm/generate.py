@@ -2,7 +2,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 
 # Load your trained model and tokenizer
-MODEL_DIR = "my_trained_llm"  # or use path where model is saved
+MODEL_DIR = "custom_llm_knowledge"  # or use path where model is saved
 tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
 model = AutoModelForCausalLM.from_pretrained(MODEL_DIR)
 

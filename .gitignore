@@ -3,3 +3,6 @@ LAVIS/vosk-model-en-in-0.5/
 LAVIS/jarvis/nlp/LAVIS/t5-small-onnx/
 aa_env/
 models/
+TinyLlama-1.1B-Chat-v0.6/
+LAVIS/jarvis/llm/ggml-model-q4_0.gguf
+

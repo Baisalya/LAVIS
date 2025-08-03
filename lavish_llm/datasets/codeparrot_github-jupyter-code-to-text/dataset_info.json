@@ -1,0 +1,60 @@
+{
+  "builder_name": "parquet",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "github-jupyter-code-to-text",
+  "dataset_size": 653762732,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/codeparrot/github-jupyter-code-to-text@7aa921ee95641df5965f5589fdfd1a7426296547/data/train.parquet": {
+      "num_bytes": 226542908,
+      "checksum": null
+    },
+    "hf://datasets/codeparrot/github-jupyter-code-to-text@7aa921ee95641df5965f5589fdfd1a7426296547/data/test.parquet": {
+      "num_bytes": 56919709,
+      "checksum": null
+    }
+  },
+  "download_size": 283462617,
+  "features": {
+    "repo_name": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "path": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "license": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "content": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 937225349,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 521923696,
+      "num_examples": 47452,
+      "dataset_name": "github-jupyter-code-to-text"
+    },
+    "test": {
+      "name": "test",
+      "num_bytes": 131839036,
+      "num_examples": 11864,
+      "dataset_name": "github-jupyter-code-to-text"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}

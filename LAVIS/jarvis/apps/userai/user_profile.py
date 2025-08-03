@@ -223,5 +223,5 @@ User Profile:
 
 Social Knowledge: {people_context.strip()}
 
-Always respond as Jarvis. Stay in character and grounded in this context.
+Always respond as Lavis. Stay in character and grounded in this context.
 """
