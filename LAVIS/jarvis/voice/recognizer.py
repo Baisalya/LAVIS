@@ -114,7 +114,10 @@ def calculate_rms(audio_data):
     try:
         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
         rms = np.sqrt(np.mean(np.square(samples)))
-        return int(rms if np.isfinite(rms) else 0)
+        rms_int = int(rms if np.isfinite(rms) else 0)
+        if rms_int < 10:
+            rms_int = 10
+        return rms_int
     except Exception as e:
         print(f"[RMS] Error: {e}")
         return 0
@@ -191,6 +194,7 @@ def _vosk_listen_loop():
                         if controller:
                             Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
                         command_queue.put_nowait(query)
+                        set_last_spoken_text(query)
                         command_recognizer.Reset()
                         freeform_recognizer.Reset()
                         last_speech_time = now
@@ -216,6 +220,7 @@ def _vosk_listen_loop():
                         if controller:
                             Clock.schedule_once(lambda dt: controller.update(query, category="fallback", typing=True))
                         command_queue.put_nowait(query)
+                        set_last_spoken_text(query)
                         Clock.schedule_once(lambda dt: set_session_mode(False), 10)
                         Clock.schedule_once(lambda dt: controller.clear_live_text(), 0)
                         command_recognizer.Reset()

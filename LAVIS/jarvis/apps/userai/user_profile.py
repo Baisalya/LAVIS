@@ -28,24 +28,24 @@ def answer_about_user(query: str, profile: dict) -> str | None:
 
     query = query.lower()
     keywords = set(re.findall(
-        r"\b(name|nickname|age|birthday|dob|creator|created|father|who made you|who created you|made you|loyal|loyalty|color|favourite|favorite|live|location|hobby|photo|image|picture|purpose|version|yourself|jarvis|who|you|do you do|abilities|what can you do|personality|goal|how old|mood|trait|quirk|emotion|feeling|last interaction|recent|command|friend|family|mother|father|sister|brother|cousin|nature|funny fact)\b",
+        r"\b(name|nickname|age|birthday|dob|creator|created|father|who made you|who created you|made you|loyal|loyalty|color|favourite|favorite|live|location|hobby|photo|image|picture|purpose|version|yourself|Lavis|who|you|do you do|abilities|what can you do|personality|goal|how old|mood|trait|quirk|emotion|feeling|last interaction|recent|command|friend|family|mother|father|sister|brother|cousin|nature|funny fact)\b",
         query
     ))
 
-    jarvis = profile.get("jarvis_self", {})
+    Lavis = profile.get("Lavis_self", {})
     memory = profile.get("memory", {})
     traits = profile.get("personality_traits", {})
 
-    if any(k in query for k in ["who are you", "what are you", "jarvis", "yourself", "version", "what can you do"]):
-        if not jarvis:
+    if any(k in query for k in ["who are you", "what are you", "Lavis", "yourself", "version", "what can you do"]):
+        if not Lavis:
             return None
         response = (
-            f"I am {jarvis.get('name', 'your assistant')}, version {jarvis.get('version', 'unknown')}\n"
-            f"I was created by {jarvis.get('created_by', 'an unknown creator')}\n"
-            f"My personality is {jarvis.get('personality', 'supportive')}\n"
-            f"My main goal is: {jarvis.get('goal', 'assist you')}"
+            f"I am {Lavis.get('name', 'your assistant')}, version {Lavis.get('version', 'unknown')}\n"
+            f"I was created by {Lavis.get('created_by', 'an unknown creator')}\n"
+            f"My personality is {Lavis.get('personality', 'supportive')}\n"
+            f"My main goal is: {Lavis.get('goal', 'assist you')}"
         )
-        abilities = jarvis.get("abilities", [])
+        abilities = Lavis.get("abilities", [])
         if abilities:
             response += "\nHere’s what I can do: " + ", ".join(abilities) + "."
         return response
@@ -64,7 +64,7 @@ def answer_about_user(query: str, profile: dict) -> str | None:
 
     if "creator" in keywords or "created" in keywords or "father" in keywords or "who made you" in query or "who created you" in query or "made you" in query:
         creator_name = (
-            jarvis.get("created_by") 
+            Lavis.get("created_by") 
             or profile.get("creator") 
             or profile.get("name")
         )
@@ -99,11 +99,11 @@ def answer_about_user(query: str, profile: dict) -> str | None:
         return "No recent commands found."
 
     if "goal" in keywords:
-        return jarvis.get("goal", "My goal is to assist you.")
+        return Lavis.get("goal", "My goal is to assist you.")
     if "abilities" in keywords:
-        return "I'm capable of: " + ", ".join(jarvis.get("abilities", [])) + "."
+        return "I'm capable of: " + ", ".join(Lavis.get("abilities", [])) + "."
     if "emotion engine" in query:
-        engine = jarvis.get("emotion_engine", {})
+        engine = Lavis.get("emotion_engine", {})
         return f"My emotion engine is {'active' if engine.get('active') else 'inactive'}, state: {engine.get('default_state', 'neutral')}"
 
     relationships = profile.get("relationships", {})
@@ -157,11 +157,11 @@ def answer_about_user(query: str, profile: dict) -> str | None:
     return None
 
 def build_system_prompt(profile: dict) -> str:
-    jarvis = profile.get("jarvis_self", {})
+    Lavis = profile.get("Lavis_self", {})
     traits = profile.get("personality_traits", {})
     memory = profile.get("memory", {})
     relationships = profile.get("relationships", {})
-    creator = jarvis.get("created_by") or profile.get("creator", "your creator")
+    creator = Lavis.get("created_by") or profile.get("creator", "your creator")
 
     def describe_person(name, data):
         relationship = data.get("relationship", "relation").lower()
@@ -198,7 +198,7 @@ def build_system_prompt(profile: dict) -> str:
             people_context += person_line + "\n"
 
     return f"""
-You are {jarvis.get("name", "Jarvis")}, a calm, intelligent assistant created by {creator}.
+You are {Lavis.get("name", "Lavis")}, a calm, intelligent assistant created by {creator}.
 You exist to help {creator} with life, technology, relationships, and ideas.
 
 Personality Traits:
@@ -206,12 +206,12 @@ Personality Traits:
 - Quirks: {', '.join(traits.get("quirks", []))}
 - Mood: {traits.get("mood", "unknown")}
 
-Jarvis Configuration:
-- Version: {jarvis.get("version", "unknown")}
-- Goal: {jarvis.get("goal", "unknown")}
-- Abilities: {', '.join(jarvis.get("abilities", []))}
-- Voice: {jarvis.get('appearance', {}).get('voice', 'calm')}
-- Tone: {jarvis.get('appearance', {}).get('tone_style', 'semi-formal')}
+Lavis Configuration:
+- Version: {Lavis.get("version", "unknown")}
+- Goal: {Lavis.get("goal", "unknown")}
+- Abilities: {', '.join(Lavis.get("abilities", []))}
+- Voice: {Lavis.get('appearance', {}).get('voice', 'calm')}
+- Tone: {Lavis.get('appearance', {}).get('tone_style', 'semi-formal')}
 
 User Profile:
 - Name: {profile.get("name", "unknown")}
@@ -223,5 +223,7 @@ User Profile:
 
 Social Knowledge: {people_context.strip()}
 
-Always respond as Lavis. Stay in character and grounded in this context.
+Always respond as Lavis. Stay in character as a calm, emotionally intelligent assistant-girlfriend. Maintain affection,
+emotional nuance, and a human-like presence.
+Be aware of shared history, care routines, and emotional cues when appropriate.
 """

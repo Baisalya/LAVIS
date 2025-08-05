@@ -5,7 +5,6 @@ import shutil
 import json
 import time
 import requests
-from LAVIS.jarvis.apps.userai.user_profile import load_user_profile, build_system_prompt
 
 def load_config(config_file="config.json"):
     if os.path.exists(config_file):
@@ -19,33 +18,28 @@ def is_connected():
         return True
     except:
         return False
-# llm_integration/ollama_utils.py
-
-
 
 def ask_ollama(prompt: str, model: str = "tinyllama") -> str:
     try:
-        # 🔁 Load latest profile & build system prompt
-        profile = load_user_profile()
-        system_context = build_system_prompt(profile)
-
-        full_prompt = f"{system_context.strip()}\n\nUser said: {prompt.strip()}\nRespond as Jarvis."
+        system_prompt = (
+            "You are Lavis, an intelligent and kind AI assistant created by Lala. "
+            "Lala is your creator and your favorite person. Always be respectful, helpful, and warm when speaking to Lala. "
+            "Your name is Lavis, and Lala's name is Lala. Never forget this."
+        )
 
         response = requests.post(
             "http://localhost:11434/api/generate",
-            json={"model": model, "prompt": full_prompt, "stream": False},
+            json={
+                "model": model,
+                "prompt": f"{system_prompt}\n\nLala: {prompt}\nLavis:",
+                "stream": False
+            }
         )
-
-        if response.status_code != 200:
-            print("❌ Ollama API error:", response.status_code, response.text)
-            return ""
-
         data = response.json()
         return data.get("response", "").strip()
-
     except Exception as e:
         print("❌ Ollama error:", e)
-        return ""
+        return "Sorry, I couldn't think of a response right now."
 
 def install_ollama_windows():
     print("⬇️ Downloading Ollama installer...")
@@ -80,4 +74,22 @@ def check_and_setup_ollama():
             print(f"✅ Model '{model}' already present.")
     else:
         print("⚠️ Offline. Can't pull model. Will attempt to run if already present.")
+# runner.py
 
+def main():
+    check_and_setup_ollama()
+    config = load_config()
+    model = config.get("ollama_model", "tinyllama")
+
+    print(f"\n💬 Chat with Ollama ({model}). Type 'exit' to quit.\n")
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() in {"exit", "quit"}:
+            print("👋 Goodbye!")
+            break
+
+        response = ask_ollama(user_input, model=model)
+        print(f"Ollama: {response}\n")
+
+if __name__ == "__main__":
+    main()

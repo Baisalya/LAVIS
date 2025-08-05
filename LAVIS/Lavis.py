@@ -1,3 +1,5 @@
+# Lavis.py (Modified)
+
 import os, re, time, logging, threading, datetime
 from fuzzywuzzy import fuzz
 import random
@@ -140,6 +142,7 @@ class LavisCore:
             Clock.schedule_once(lambda dt: self.hud_controller.update(command, category="command", typing=True), 0)
             command_lower = command.lower().strip()
 
+            # Control modes and other special commands omitted here for brevity...
             # === Mode controls ===
             if "activate hand control" in command_lower:
                 self.hud_speak("Activating hand control mode. Use your hand to control the system.")
@@ -207,11 +210,12 @@ class LavisCore:
                 self.hud_speak("Command not allowed in restricted mode.")
                 return
 
+
             if self.session_state != "normal":
                 self.hud_speak("Assistant is not awake yet.")
                 return
 
-            # === NLP and intent logic ===
+            # === NLP and fallback ===
             intent = detect_intent(command)
             print(f"🧠 Intent Detected: {intent}")
 
@@ -234,36 +238,18 @@ class LavisCore:
             if intent == "explorer" and handle_explorer(command):
                 Clock.schedule_once(lambda dt: show_hud_reply("Handled file explorer command."), 0)
                 return
-
             if intent == "network":
                 from LAVIS.jarvis.commands.network_bluetooth import handle_network_bluetooth
                 if handle_network_bluetooth(command):
                     Clock.schedule_once(lambda dt: show_hud_reply("Network/Bluetooth command handled."), 0)
                     return
-            # === Natural language ===
-
+            # Natural language fallback
             if intent == "conversation":
                 Clock.schedule_once(lambda dt: show_hud_reply("Let me think about that..."), 0)
-                def run_fallback():
-                    try:
-                        response = handle_fallback(command)
-                        self.session_state = "normal"
-                        if response:
-                            Clock.schedule_once(lambda dt: self.hud_controller.update(response, category="reply", typing=True), 0)
-                    except Exception as e:
-                        print(f"[Fallback Error] {e}")
-                threading.Thread(target=run_fallback, daemon=True).start()
+                threading.Thread(target=lambda: handle_fallback(command), daemon=True).start()
                 return
-            # Default fallback
 
-            def run_final_fallback():
-                try:
-                    response = handle_fallback(command)
-                    self.session_state = "normal"
-                    Clock.schedule_once(lambda dt: self.hud_controller.update(response or "Sorry, I couldn't find a response.", category="reply", typing=True), 0)
-                except Exception as e:
-                    print(f"[Fallback Error] {e}")
-            threading.Thread(target=run_final_fallback, daemon=True).start()
+            threading.Thread(target=lambda: handle_fallback(command), daemon=True).start()
 
         except Exception as e:
             logging.exception("⚠️ Runtime error in main loop:")
@@ -275,35 +261,38 @@ class LavisRunner:
         self.core = LavisCore()
 
     def run(self):
-        try:
-            if not os.path.exists("jarvis.sqlite3"):
-                train_chatbot()
-            get_start_menu_apps(force_reload=True)
-            self.core.welcome()
-            resume_listening()
-            start_background_listening()
-            start_network_watcher()
+        while True:
+            try:
+                if not os.path.exists("jarvis.sqlite3"):
+                    train_chatbot()
+                get_start_menu_apps(force_reload=True)
+                self.core.welcome()
+                resume_listening()
+                start_background_listening()
+                start_network_watcher()
 
-            while True:
-                try:
-                    if not command_queue.empty():
-                        input_text = command_queue.get()
-                        Clock.schedule_once(lambda dt: self.core.hud_controller.type_live_text(input_text), 0)
-                        print("🎤 Heard:", input_text)
-                        self.core.handle_input(input_text)
-                    else:
-                        time.sleep(0.1)
-                except Exception as e:
-                    logging.exception("⚠️ Runtime error in main loop:")
-                    Clock.schedule_once(lambda dt: update_hud_text(str(e), category="error"), 0)
-                    speak("Something went wrong during input processing.")
-        except KeyboardInterrupt:
-            stop_background_listening()
-            self.core.hud_speak("Jarvis shutting down.")
-        except Exception as e:
-            logging.exception("❌ Error in outer main loop:")
-            Clock.schedule_once(lambda dt: update_hud_text(str(e), category="error"), 0)
-            speak("Something went wrong.")
+                while True:
+                    try:
+                        if not command_queue.empty():
+                            input_text = command_queue.get()
+                            Clock.schedule_once(lambda dt: self.core.hud_controller.type_live_text(input_text), 0)
+                            print("🎤 Heard:", input_text)
+                            self.core.handle_input(input_text)
+                        else:
+                            time.sleep(0.1)
+                    except Exception as e:
+                        logging.exception("⚠️ Runtime error in inner loop:")
+                        Clock.schedule_once(lambda dt: update_hud_text(str(e), category="error"), 0)
+                        speak("Something went wrong during input processing.")
+            except KeyboardInterrupt:
+                stop_background_listening()
+                self.core.hud_speak("Jarvis shutting down.")
+                break
+            except Exception as e:
+                logging.exception("❌ Error in outer main loop:")
+                Clock.schedule_once(lambda dt: update_hud_text(str(e), category="error"), 0)
+                speak("Something went wrong. Restarting...")
+                time.sleep(1)
 
 def main():
     LavisRunner().run()

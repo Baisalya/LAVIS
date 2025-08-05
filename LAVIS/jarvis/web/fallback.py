@@ -25,6 +25,13 @@ def detect_emotion(text: str) -> str:
         return "curious"
     return "neutral"
 
+def is_question_like(text: str) -> bool:
+    question_words = ["what", "why", "how", "who", "when", "where", "do you", "can you"]
+    return "?" in text or any(text.lower().startswith(w) for w in question_words)
+
+def is_conversational(text: str) -> bool:
+    return is_question_like(text) or detect_emotion(text) in ["positive", "negative"]
+
 def load_config():
     try:
         with open("config.json", "r") as f:
@@ -81,9 +88,7 @@ def handle_fallback(command: str) -> str:
                 last_fallback_response = jarvis_reply
                 show_fallback_in_hud(jarvis_reply)
                 print("🗣️ Speaking (profile):", jarvis_reply)
-                #human_speak(jarvis_reply)
-                resume_listening()
-                set_session_mode(False)
+                human_speak(jarvis_reply)
                 return jarvis_reply
 
         intent = detect_intent(command)
@@ -97,7 +102,6 @@ def handle_fallback(command: str) -> str:
         config = load_config()
         fallback_order = config.get("fallback_priority", [])
         auto_converse = config.get("fallback_auto_converse", False)
-        auto_read = True
 
         set_session_mode(True)
         print("🧠 Session mode: ON")
@@ -110,6 +114,7 @@ def handle_fallback(command: str) -> str:
         for method in fallback_order:
             try:
                 print(f"🔍 Trying: {method}")
+                show_fallback_in_hud(f"Trying: {method}")
                 response = None
 
                 if method == "ollama":
@@ -142,9 +147,16 @@ def handle_fallback(command: str) -> str:
                     show_fallback_in_hud(response)
                     print("🗣️ Speaking (LLM):", response)
                     human_speak(response)
-                    if auto_converse:
+
+                    # ✅ Smart Session Control
+                    if auto_converse and is_conversational(command):
+                        print("🔁 Keeping session open for further conversation...")
+                        # Do not resume listening yet
+                    else:
+                        print("🔕 Ending session after one-shot reply...")
                         resume_listening()
                         set_session_mode(False)
+
                     return response
 
             except Exception as e:
