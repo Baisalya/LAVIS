@@ -1,10 +1,4 @@
-import time
-import wikipedia
-import requests
-import json
-
-from LAVIS.jarvis.llm.ollama_client import ask_ollama
-from LAVIS.jarvis.llm.groq_client import ask_groq
+from LAVIS.jarvis.llm.llm_ask import LLMFallback
 from LAVIS.jarvis.voice.speaker import human_speak, speak
 from LAVIS.jarvis.apps.chatbot import chatbot
 from LAVIS.jarvis.network import is_connected
@@ -12,8 +6,12 @@ from LAVIS.jarvis.voice.recognizer import resume_listening, set_session_mode
 from LAVIS.hud_display import show_fallback_in_hud
 from LAVIS.jarvis.nlp.intent_detector import detect_intent
 from LAVIS.jarvis.apps.userai.user_profile import load_user_profile, answer_about_user, build_system_prompt
+import wikipedia
+import requests
+import json
 
 last_fallback_response = None
+llm_fallback = LLMFallback()
 
 def detect_emotion(text: str) -> str:
     text = text.lower()
@@ -39,7 +37,7 @@ def load_config():
     except Exception as e:
         print(f"⚠️ Failed to load config.json: {e}")
         return {
-            "fallback_priority": ["groq", "ollama", "wikipedia", "duckduckgo", "chatbot"],
+            "fallback_priority": ["llm", "wikipedia", "duckduckgo", "chatbot"],
             "fallback_auto_converse": True
         }
 
@@ -70,21 +68,11 @@ def handle_fallback(command: str) -> str:
         if hasattr(profile, "get") and is_personal_query(command):
             print("🔁 Routing to: Profile Answer")
             profile_answer = answer_about_user(command, profile)
-
             if profile_answer:
                 system_prompt = build_system_prompt(profile)
                 combined_prompt = f"{system_prompt}\n\nUser asked: {command}\nHere is the known fact: {profile_answer}\nRespond naturally as Jarvis."
 
-                config = load_config()
-                llm_method = config.get("fallback_priority", ["groq"])[0]
-
-                if llm_method == "groq":
-                    jarvis_reply = ask_groq(combined_prompt, system_prompt="")
-                elif llm_method == "ollama":
-                    jarvis_reply = ask_ollama(combined_prompt, system_prompt="")
-                else:
-                    jarvis_reply = profile_answer
-
+                jarvis_reply = llm_fallback.ask(combined_prompt)
                 last_fallback_response = jarvis_reply
                 show_fallback_in_hud(jarvis_reply)
                 print("🗣️ Speaking (profile):", jarvis_reply)
@@ -117,10 +105,8 @@ def handle_fallback(command: str) -> str:
                 show_fallback_in_hud(f"Trying: {method}")
                 response = None
 
-                if method == "ollama":
-                    response = ask_ollama(f"User asked: {command}\nRespond clearly.")
-                elif method == "groq":
-                    response = ask_groq(f"The user said:\n{command}\nRespond as a helpful assistant.")
+                if method == "llm":
+                    response = llm_fallback.ask(f"The user said:\n{command}\nRespond as a helpful assistant.")
                 elif method == "wikipedia" and is_connected():
                     response = search_wikipedia(command)
                 elif method == "duckduckgo" and is_connected():
@@ -132,7 +118,6 @@ def handle_fallback(command: str) -> str:
                     cleaned = response.lower().strip()
                     if any(bad in cleaned for bad in BAD_RESPONSES):
                         print(f"⚠️ Rejected weak response from {method}")
-                        print("🧠 Attempting profile-based answer fallback...")
                         profile_response = answer_about_user(command, profile)
                         if profile_response:
                             show_fallback_in_hud(profile_response)
@@ -145,13 +130,14 @@ def handle_fallback(command: str) -> str:
 
                     last_fallback_response = response
                     show_fallback_in_hud(response)
-                    print("🗣️ Speaking (LLM):", response)
+                    print("🗣️ Speaking:", response)
                     human_speak(response)
-
                     # ✅ Smart Session Control
+
                     if auto_converse and is_conversational(command):
                         print("🔁 Keeping session open for further conversation...")
-                        # Do not resume listening yet
+                                                # Do not resume listening yet
+
                     else:
                         print("🔕 Ending session after one-shot reply...")
                         resume_listening()
@@ -173,7 +159,6 @@ def handle_fallback(command: str) -> str:
         resume_listening()
         set_session_mode(False)
         return "An error occurred while processing your request."
-
 def get_hardcoded_response(text: str) -> str:
     text = text.lower().strip()
     simple_responses = {

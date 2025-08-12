@@ -1,29 +1,62 @@
-    import requests
-    import json
+import requests
+import json
+from LAVIS.jarvis.apps.userai.user_profile import load_user_profile, build_system_prompt
 
-    def ask_gemini(prompt: str) -> str:
-        try:
-            with open("config.json", "r") as f:
-                config = json.load(f)
-                print("📄 Loaded config:", config)  # Debug print
-                key = config.get("gemini_api_key")
-                if not key:
-                    print("📄 Gemini API key not found in config:", config)
-                    return None
-        except Exception as e:
-            print("⚠️ Error reading config.json:", e)
+# 🔑 Gemini API Key (from Google AI Studio)
+GEMINI_API_KEY = "AIzaSyCf29NxuCUdPvdwSdxyoHTjW-G10e6EiGo"
+
+# ⚡ Choose model
+GEMINI_MODEL = "gemini-1.5-flash-latest"  # Or "models/gemini-1.5-pro-latest"
+
+def ask_gemini(prompt: str) -> str:
+    """
+    Send a prompt to Google's Gemini API and return the response.
+    """
+    if not GEMINI_API_KEY:
+        print("❌ Gemini API key not set.")
+        return None
+
+    # 🔁 Load latest profile & build system context dynamically
+    profile = load_user_profile()
+    system_context = build_system_prompt(profile)
+
+    try:
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
+            headers={
+                "Content-Type": "application/json"
+            },
+            json={
+                "contents": [
+                    {"role": "user", "parts": [{"text": f"{system_context}\n{prompt}"}]}
+                ]
+            },
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            print(f"❌ Gemini API error: {response.status_code}")
+            print(response.text)
             return None
 
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-        headers = {"Content-Type": "application/json"}
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}]
-        }
+        data = response.json()
 
-        try:
-            response = requests.post(f"{url}?key={key}", headers=headers, json=payload)
-            data = response.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception as e:
-            print("Gemini error:", e)
+        # Extract text safely
+        if "candidates" in data and len(data["candidates"]) > 0:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        else:
             return None
+
+    except Exception as e:
+        print("❌ Exception in Gemini API:", e)
+        return None
+
+
+if __name__ == "__main__":
+    while True:
+        user_input = input("You: ")
+        if user_input.lower() in ["exit", "quit"]:
+            break
+        reply = ask_gemini(user_input)
+        if reply:
+            print("Lavis:", reply)
