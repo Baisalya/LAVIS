@@ -18,6 +18,7 @@ from LAVIS.jarvis.commands.input_control import handle_input_control
 from LAVIS.jarvis.apps.userai.lavish_messages import AssistantCrushMessages
 from LAVIS.utils.hud_utils import get_hud_controller
 from LAVIS.jarvis.network import start_network_watcher
+from LAVIS.jarvis.llm.llm_ask import LLMFallback
 
 try:
     from jarvis_hud.main import update_hud_text, update_hud_status, hud_interface
@@ -39,16 +40,24 @@ SLEEP_PHRASE = "Lavish sleep"
 AUDIO_STARTUP = os.path.abspath("LAVIS/lavis_start.mp3")
 USER_NAME = "Lala"
 
+
+
+
 class LavisCore:
     def __init__(self):
         self.session_state = "sleep"
         self.control_mode = "normal"
         self.last_wake_time = 0
+
+        # LLM fallback handler
+        self.llm = LLMFallback()
+
         try:
             from jarvis_hud.components.hud_controller import HUDController
             self.hud_controller = HUDController(hud_interface) if hud_interface else self.get_fallback_console_hud()
         except Exception:
             self.hud_controller = self.get_fallback_console_hud()
+
         self.crush = AssistantCrushMessages(USER_NAME)
         update_hud_status("Sleep")
 
@@ -75,9 +84,30 @@ class LavisCore:
         try:
             if os.path.exists(AUDIO_STARTUP):
                 playsound(AUDIO_STARTUP)
-            self.hud_speak("Presence confirmed. Let's make things happen when you're ready.")
+
+            try:
+                welcome_msg = self.llm.ask(f"Generate a warm,short startup welcome message for {USER_NAME} after startup. Avoid robotic tone.")
+            except Exception:
+                welcome_msg = "Presence confirmed. Let's make things happen when you're ready."
+
+            self.hud_speak(welcome_msg)
+
         except Exception as e:
             print(f"[Welcome Error] {e}")
+
+    def generate_greeting(self):
+        current_hour = datetime.datetime.now().hour
+        try:
+            return self.llm.ask(f"Generate a friendly, natural-sounding greeting for {USER_NAME} based on the current time ({current_hour} hours). Avoid being repetitive or overly formal.")
+        except Exception:
+            if 5 <= current_hour < 12:
+                return f"Good morning, {USER_NAME}"
+            elif 12 <= current_hour < 17:
+                return f"Good afternoon, {USER_NAME}"
+            elif 17 <= current_hour < 21:
+                return f"Good evening, {USER_NAME}"
+            else:
+                return self.crush.random_late_night_greeting()
 
     def check_wake_phrase(self, text):
         try:
@@ -87,24 +117,20 @@ class LavisCore:
                     self.session_state = "normal"
                     self.last_wake_time = time.time()
                     Clock.schedule_once(lambda dt: update_hud_status("Online"), 0)
-                    current_hour = datetime.datetime.now().hour
-                    if 5 <= current_hour < 12:
-                        greeting = f"Good morning, {USER_NAME} "
-                    elif 12 <= current_hour < 17:
-                        greeting = f"Good afternoon, {USER_NAME} "
-                    elif 17 <= current_hour < 21:
-                        greeting = f"Good evening, {USER_NAME} "
-                    else:
-                        greeting = self.crush.random_late_night_greeting()
-                    self.hud_speak(f"{greeting} Welcome back!")
+                    greeting = self.generate_greeting()
+                    self.hud_speak(greeting)
                 else:
-                    self.hud_speak(random.choice([
-                        "Yes? I'm right here.",
-                        "You called me?",
-                        "Standing by!",
-                        f"How can I help, {USER_NAME}?",
-                        "Reporting for duty!"
-                    ]))
+                    try:
+                        reply = self.llm.ask(f"User greeted you with '{text}'. Respond naturally and concisely.")
+                    except Exception:
+                        reply = random.choice([
+                            "Yes? I'm right here.",
+                            "You called me?",
+                            "Standing by!",
+                            f"How can I help, {USER_NAME}?",
+                            "Reporting for duty!"
+                        ])
+                    self.hud_speak(reply)
                 return True
 
             elif re.search(r"\b(jarvis\s+)?(sleep|go to sleep|shutdown|rest)\b", text):
@@ -142,8 +168,7 @@ class LavisCore:
             Clock.schedule_once(lambda dt: self.hud_controller.update(command, category="command", typing=True), 0)
             command_lower = command.lower().strip()
 
-            # Control modes and other special commands omitted here for brevity...
-            # === Mode controls ===
+            # Control modes
             if "activate hand control" in command_lower:
                 self.hud_speak("Activating hand control mode. Use your hand to control the system.")
                 try:
@@ -210,12 +235,11 @@ class LavisCore:
                 self.hud_speak("Command not allowed in restricted mode.")
                 return
 
-
             if self.session_state != "normal":
                 self.hud_speak("Assistant is not awake yet.")
                 return
 
-            # === NLP and fallback ===
+            # NLP and fallback
             intent = detect_intent(command)
             print(f"🧠 Intent Detected: {intent}")
 
@@ -243,17 +267,20 @@ class LavisCore:
                 if handle_network_bluetooth(command):
                     Clock.schedule_once(lambda dt: show_hud_reply("Network/Bluetooth command handled."), 0)
                     return
-            # Natural language fallback
-            if intent == "conversation":
-                Clock.schedule_once(lambda dt: show_hud_reply("Let me think about that..."), 0)
-                threading.Thread(target=lambda: handle_fallback(command), daemon=True).start()
-                return
 
-            threading.Thread(target=lambda: handle_fallback(command), daemon=True).start()
+            # Conversational fallback
+            try:
+                Clock.schedule_once(lambda dt: show_hud_reply("Let me think about that..."), 0)
+                threading.Thread(
+                    target=lambda: self.hud_speak(self.llm.ask(command)),
+                    daemon=True
+                ).start()
+            except Exception:
+                threading.Thread(target=lambda: handle_fallback(command), daemon=True).start()
 
         except Exception as e:
             logging.exception("⚠️ Runtime error in main loop:")
-            Clock.schedule_once(lambda dt: update_hud_text(str(e), category="error"), 0)
+            Clock.schedule_once(lambda dt: update_hud_status(str(e), category="error"), 0)
             speak("Something went wrong during input processing.")
 
 class LavisRunner:
