@@ -1,4 +1,4 @@
-# ✅ Fully patched speaker.py with offline logging and crash resilience
+# ✅ Fully-duplex speaker.py with barge-in (interrupt-on-speech) + offline fallback
 import asyncio
 import threading
 import io
@@ -10,18 +10,22 @@ import random
 import time
 
 from LAVIS.jarvis.network import is_connected
-from LAVIS.jarvis.voice.recognizer import set_last_spoken_text, pause_listening, resume_listening
-from LAVIS.jarvis.voice.controllers.tts_guard import guard_microphone
+from LAVIS.jarvis.voice.recognizer import set_last_spoken_text, resume_listening  # keep API
+# NOTE: we intentionally DO NOT pause listening during TTS anymore for barge-in
+# from LAVIS.jarvis.voice.recognizer import pause_listening  # <- not used
 
 try:
     from jarvis_hud.main import append_hud_console
 except ImportError:
     def append_hud_console(msg): print(msg)
 
+# === Global speaking state for barge-in ===
 stop_speaking = False
+speaking = False  # <- recognizer reads this to detect barge-in
 voice_name = "en-US-AriaNeural"
-engine = pyttsx3.init()
 
+# === Offline TTS engine ===
+engine = pyttsx3.init()
 engine.setProperty('rate', 160)
 engine.setProperty('volume', 1.0)
 try:
@@ -31,8 +35,15 @@ try:
 except Exception as e:
     print(f"[TTS] Voice setup error: {e}")
 
-@guard_microphone
-def speak_offline(text):
+def _mark_speaking(active: bool):
+    global speaking
+    speaking = active
+
+def speak_offline(text: str):
+    """Offline TTS without pausing the mic (barge-in capable)."""
+    global stop_speaking
+    _mark_speaking(True)
+    stop_speaking = False
     try:
         print("🗣️ (offline)", text)
         append_hud_console(f"🗣️ (offline) {text}")
@@ -47,9 +58,12 @@ def speak_offline(text):
         except Exception:
             pass
     finally:
-        resume_listening()  # ✅ Ensure resume even if offline TTS fails
+        _mark_speaking(False)
+        # we keep recognizer running throughout; just ensure normal state
+        resume_listening()
 
-def play_interruptible(audio_segment):
+def play_interruptible(audio_segment: AudioSegment):
+    """Play audio and allow mid-stream interruption via stop_speaking flag."""
     global stop_speaking
     p = pyaudio.PyAudio()
     stream = p.open(
@@ -58,28 +72,37 @@ def play_interruptible(audio_segment):
         rate=audio_segment.frame_rate,
         output=True,
     )
-    chunk_size = 1024
+    chunk_size = 2048
     data = audio_segment.raw_data
-    for i in range(0, len(data), chunk_size):
-        if stop_speaking:
-            break
-        stream.write(data[i:i+chunk_size])
-    stream.stop_stream()
-    stream.close()
-    p.terminate()
-
-def play_with_guard(audio_segment):
-    pause_listening()
     try:
-        play_interruptible(audio_segment)
-        time.sleep(0.2)
+        for i in range(0, len(data), chunk_size):
+            if stop_speaking:
+                break
+            stream.write(data[i:i+chunk_size])
     finally:
-        resume_listening()
+        try:
+            stream.stop_stream()
+            stream.close()
+        except Exception:
+            pass
+        p.terminate()
 
-def speak(text):
+def play_with_bargein(audio_segment: AudioSegment):
+    """No mic pausing here — recognizer keeps running and can interrupt."""
+    play_interruptible(audio_segment)
+    # small cushion to avoid clipping end
+    time.sleep(0.05)
+
+def speak(text: str):
+    """
+    Network TTS with offline fallback.
+    Barge-in enabled: recognizer runs; on user speech -> stop_speech() is called.
+    """
     global stop_speaking
     stop_speaking = False
+    _mark_speaking(True)
     set_last_spoken_text(text)
+
     if not is_connected():
         speak_offline(text)
         return
@@ -111,7 +134,7 @@ def speak(text):
 
             if not stop_speaking:
                 try:
-                    play_with_guard(audio)
+                    play_with_bargein(audio)
                 except Exception as playback_error:
                     print("🔊 Playback error:", playback_error)
                     speak_offline(text)
@@ -119,6 +142,8 @@ def speak(text):
         except Exception as tts_error:
             print("⚠️ edge-tts failed, using offline fallback:", tts_error)
             speak_offline(text)
+        finally:
+            _mark_speaking(False)
 
     def run_async():
         try:
@@ -130,14 +155,18 @@ def speak(text):
             print(f"[TTS Thread Error] {e}")
             traceback.print_exc()
             speak_offline(text)
+        finally:
+            _mark_speaking(False)
 
     try:
         threading.Thread(target=run_async, daemon=True).start()
     except Exception as e:
         print("[TTS Startup Error]", e)
+        _mark_speaking(False)
         speak_offline(text)
 
 def stop_speech():
+    """External interrupt for barge-in or voice 'stop' command."""
     global stop_speaking
     stop_speaking = True
     try:
@@ -146,7 +175,11 @@ def stop_speech():
         print("⚠️ engine.stop() failed:", e)
     print("⛔ Speech stopped")
 
-def human_speak(answer):
+def human_speak(answer: str):
+    """
+    Optional helper: speak a quick filler then the final answer.
+    Both are barge-in capable.
+    """
     filler = random.choice([
         "Got it...",
         "Let me respond...",
@@ -158,14 +191,16 @@ def human_speak(answer):
     def run_human_speak():
         global stop_speaking
         try:
+            # Filler
             stop_speaking = False
             try:
                 speak(filler)
-                time.sleep(1.5)
+                time.sleep(1.0)
             except Exception as filler_error:
                 print("⚠️ Filler speak failed:", filler_error)
                 speak_offline(filler)
 
+            # Final
             stop_speaking = False
             final = answer.strip() if answer else "Sorry, I don't have anything useful."
             try:
@@ -174,7 +209,7 @@ def human_speak(answer):
                 print("❌ Final response failed:", final_error)
                 speak_offline(final)
 
-        except Exception as e:
+        except Exception:
             import traceback
             print("❌ human_speak crashed:")
             traceback.print_exc()

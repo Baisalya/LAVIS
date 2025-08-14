@@ -1,10 +1,10 @@
-# recognizer.py
+# ✅ Recognizer with barge-in: keeps listening during TTS and cuts it off on user speech
 import os
 import json
 import time
 import threading
 import traceback
-from queue import Queue, Full
+from queue import Queue
 
 import numpy as np
 import pyaudio
@@ -21,8 +21,9 @@ from LAVIS.jarvis.voice.controllers.watchdog import VoiceWatchdog  # ✅ modular
 try:
     from jarvis_hud.main import append_hud_console
 except ImportError:
-    def append_hud_console(message): pass
+    def append_hud_console(message): print(message)
 
+# ===== Settings =====
 AUTHENTICATION_ENABLED = False
 
 COMMAND_MODEL_PATH = os.path.abspath(os.path.join(
@@ -33,10 +34,11 @@ FREEFORM_MODEL_PATH = os.path.abspath(os.path.join(
 ))
 COMMANDS_JSON_PATH = os.path.join(os.path.dirname(__file__), "commands.json")
 
+# ===== Shared state =====
 command_queue = Queue()
 audio_stream = None
 _listening = False
-_paused = False
+_paused = False  # still supported for manual pause; not used by TTS anymore
 _in_session = False
 _indicator_thread = None
 _listener_thread = None
@@ -48,7 +50,7 @@ last_spoken_time = 0
 
 def set_last_spoken_text(text):
     global last_spoken_text, last_spoken_time
-    last_spoken_text = text.lower().strip()
+    last_spoken_text = (text or "").lower().strip()
     last_spoken_time = time.time()
 
 os.environ["VOSK_LOG_LEVEL"] = "0"
@@ -78,6 +80,7 @@ def set_session_mode(active: bool):
     _update_hud_text(f"{'SL:' if active else 'L:'} {'💬 Chatting' if active else '🟢 Listening'} 🎙️")
 
 def pause_listening():
+    """Manual pause (not used by TTS any more)."""
     global _paused
     if not _paused:
         _paused = True
@@ -115,9 +118,7 @@ def calculate_rms(audio_data):
         samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32)
         rms = np.sqrt(np.mean(np.square(samples)))
         rms_int = int(rms if np.isfinite(rms) else 0)
-        if rms_int < 10:
-            rms_int = 10
-        return rms_int
+        return max(rms_int, 10)
     except Exception as e:
         print(f"[RMS] Error: {e}")
         return 0
@@ -126,6 +127,9 @@ def _vosk_listen_loop():
     global audio_stream
     _last_partial = ""
     p = None
+
+    # Import speaking + stop function for barge-in
+    from LAVIS.jarvis.voice.speaker import stop_speech, speaking
 
     try:
         p = pyaudio.PyAudio()
@@ -152,42 +156,82 @@ def _vosk_listen_loop():
         controller = get_hud_controller()
 
         while _listening:
+            # === Read mic ===
             try:
                 data = audio_stream.read(2000, exception_on_overflow=False)
-            # ✅ Ignore TTS voice playback (assistant's own speech)
-
-                if is_tts_voice(data):
-                    append_hud_console("🔇 Ignored own TTS voice.")
-                    continue
             except Exception as e:
                 print(f"🔇 Audio read error: {e}")
                 continue
 
+            # === Metering (for HUD) ===
             rms_level = calculate_rms(data)
             if controller and hasattr(controller.hud, "mic_controller"):
-                controller.hud.mic_controller.update_level(rms_level)
-
-            now = time.time()
-            # ✅ Handle "stop" command even while paused
-
-            if _paused:
                 try:
-                    partial_result = json.loads(freeform_recognizer.PartialResult())
-                    partial = partial_result.get("partial", "").strip().lower()
-                    if partial in ["stop", "stop it", "cancel"]:
-                        append_hud_console("🛑 Voice stop detected while paused.")
-                        from LAVIS.jarvis.voice.speaker import stop_speech
-                        stop_speech()
-                        set_last_spoken_text("")
+                    controller.hud.mic_controller.update_level(rms_level)
                 except Exception:
                     pass
-                time.sleep(0.1)
+
+            now = time.time()
+
+            # === If manually paused, still allow "stop" voice command ===
+            if _paused:
+                try:
+                    if freeform_recognizer.AcceptWaveform(data):
+                        result = json.loads(freeform_recognizer.Result())
+                        query = (result.get("text") or "").strip().lower()
+                        if query in ["stop", "stop it", "cancel", "mute", "enough"]:
+                            append_hud_console("🛑 Voice stop detected while paused.")
+                            stop_speech()
+                            set_last_spoken_text("")
+                except Exception:
+                    pass
+                time.sleep(0.05)
                 continue
 
+            # === Ignore assistant's own TTS audio (self-voice) ===
+            if is_tts_voice(data):
+                # assistant speaking: we ignore synthesized voice completely
+                # BUT we keep recognizer alive for barge-in detection on real user voice chunks
+                continue
+
+            # === BARge-in: if assistant is speaking and we hear real voice, cut TTS ===
+            if speaking:
+                # Try to get a quick accept to confirm human speech started
+                if freeform_recognizer.AcceptWaveform(data):
+                    try:
+                        result = json.loads(freeform_recognizer.Result())
+                        query = (result.get("text") or "").strip().lower()
+                        if query:
+                            append_hud_console("⚡ Barge-in detected! Stopping TTS.")
+                            stop_speech()  # immediate cut
+                            set_last_spoken_text("")  # don’t treat as echo
+                            if controller:
+                                Clock.schedule_once(lambda dt: controller.update(query, category="fallback", typing=True))
+                            command_queue.put_nowait(query)
+                            set_session_mode(True)
+                            last_speech_time = now
+                            # reset recognizers to clean buffer
+                            command_recognizer.Reset()
+                            freeform_recognizer.Reset()
+                            continue
+                    except Exception as e:
+                        append_hud_console(f"[Barge-in parse error] {e}")
+                else:
+                    # Not a full accept yet; try partial for HUD feedback
+                    try:
+                        partial = (json.loads(freeform_recognizer.PartialResult()).get("partial") or "").strip().lower()
+                        if partial:
+                            _update_hud_text(f"🗣️ {partial}")
+                            last_speech_time = now
+                    except Exception:
+                        pass
+                # continue pipeline below (command/freeform) for normal flow, too
+
+            # === Command grammar path ===
             if command_recognizer.AcceptWaveform(data):
                 try:
                     result = json.loads(command_recognizer.Result())
-                    query = result.get("text", "").strip().lower()
+                    query = (result.get("text") or "").strip().lower()
                     if fuzz.ratio(query, last_spoken_text) > 85:
                         continue
                     if query in command_phrases:
@@ -202,15 +246,17 @@ def _vosk_listen_loop():
                 except Exception as e:
                     append_hud_console(f"[Command Error] {e}")
 
+            # === Freeform path ===
             if freeform_recognizer.AcceptWaveform(data):
                 try:
                     result = json.loads(freeform_recognizer.Result())
-                    query = result.get("text", "").strip().lower()
+                    query = (result.get("text") or "").strip().lower()
+
                     if fuzz.ratio(query, last_spoken_text) > 85:
                         continue
-                    if query in ["mute", "enough", "stop it", "cancel"]:
+
+                    if query in ["mute", "enough", "stop it", "cancel", "stop"]:
                         append_hud_console("🛑 Voice stop detected (freeform).")
-                        from LAVIS.jarvis.voice.speaker import stop_speech
                         stop_speech()
                         set_last_spoken_text("")
                         continue
@@ -222,7 +268,8 @@ def _vosk_listen_loop():
                         command_queue.put_nowait(query)
                         set_last_spoken_text(query)
                         Clock.schedule_once(lambda dt: set_session_mode(False), 10)
-                        Clock.schedule_once(lambda dt: controller.clear_live_text(), 0)
+                        if controller:
+                            Clock.schedule_once(lambda dt: controller.clear_live_text(), 0)
                         command_recognizer.Reset()
                         freeform_recognizer.Reset()
                         last_speech_time = now
@@ -230,17 +277,20 @@ def _vosk_listen_loop():
                 except Exception as e:
                     append_hud_console(f"[Freeform Error] {e}")
 
+            # === Partial (for live HUD) ===
             try:
                 partial_result = json.loads(freeform_recognizer.PartialResult())
-                partial = partial_result.get("partial", "").strip().lower()
-                if partial and partial != _last_partial:
-                    _last_partial = partial
-                    append_hud_console(f"🔎 Partial: {partial}")
-                    _update_hud_text(f"🗣️ {partial}")
-                    last_speech_time = now
+                partial = (partial_result.get("partial") or "").strip().lower()
+                if partial:
+                    if partial != _last_partial:
+                        _last_partial = partial
+                        append_hud_console(f"🔎 Partial: {partial}")
+                        _update_hud_text(f"🗣️ {partial}")
+                        last_speech_time = now
             except Exception:
                 pass
 
+            # === Silence reset ===
             if now - last_speech_time > silence_timeout:
                 _last_partial = ""
                 command_recognizer.Reset()
@@ -252,10 +302,16 @@ def _vosk_listen_loop():
         traceback.print_exc()
     finally:
         if audio_stream:
-            audio_stream.stop_stream()
-            audio_stream.close()
+            try:
+                audio_stream.stop_stream()
+                audio_stream.close()
+            except Exception:
+                pass
         if p:
-            p.terminate()
+            try:
+                p.terminate()
+            except Exception:
+                pass
 
 # === Watchdog handlers ===
 def _recognizer_health_check():
