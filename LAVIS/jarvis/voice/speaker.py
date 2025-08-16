@@ -1,30 +1,25 @@
-# ✅ Fully-duplex speaker.py with barge-in (interrupt-on-speech) + offline fallback
+# ✅ speaker.py — Hybrid Edge TTS (online) + pyttsx3 (offline) with word-aware barge-in + smart resume
 import asyncio
 import threading
+import re
+import time
+import random
+import traceback
 import io
 import edge_tts
-from pydub import AudioSegment
 import pyttsx3
+from pydub import AudioSegment
 import pyaudio
-import random
-import time
 
 from LAVIS.jarvis.network import is_connected
-from LAVIS.jarvis.voice.recognizer import set_last_spoken_text, resume_listening  # keep API
-# NOTE: we intentionally DO NOT pause listening during TTS anymore for barge-in
-# from LAVIS.jarvis.voice.recognizer import pause_listening  # <- not used
+from LAVIS.jarvis.voice.recognizer import set_last_spoken_text, resume_listening
 
 try:
     from jarvis_hud.main import append_hud_console
 except ImportError:
     def append_hud_console(msg): print(msg)
 
-# === Global speaking state for barge-in ===
-stop_speaking = False
-speaking = False  # <- recognizer reads this to detect barge-in
 voice_name = "en-US-AriaNeural"
-
-# === Offline TTS engine ===
 engine = pyttsx3.init()
 engine.setProperty('rate', 160)
 engine.setProperty('volume', 1.0)
@@ -35,188 +30,175 @@ try:
 except Exception as e:
     print(f"[TTS] Voice setup error: {e}")
 
-def _mark_speaking(active: bool):
+stop_speaking = False
+speaking = False
+_session_lock = threading.RLock()
+_resume_text = None
+_resume_word_index = 0
+_current_words = []
+
+_engine_event_supported = True
+
+def _mark_speaking(active):
     global speaking
     speaking = active
 
-def speak_offline(text: str):
-    """Offline TTS without pausing the mic (barge-in capable)."""
-    global stop_speaking
-    _mark_speaking(True)
-    stop_speaking = False
-    try:
-        print("🗣️ (offline)", text)
-        append_hud_console(f"🗣️ (offline) {text}")
-        engine.say(text)
-        engine.runAndWait()
-    except Exception as e:
-        import traceback
-        print("🔇 Offline TTS error:", e)
-        traceback.print_exc()
-        try:
-            engine.stop()
-        except Exception:
-            pass
-    finally:
-        _mark_speaking(False)
-        # we keep recognizer running throughout; just ensure normal state
-        resume_listening()
+def _reset_resume_buffers():
+    global _resume_text, _resume_word_index, _current_words
+    _resume_text = None
+    _resume_word_index = 0
+    _current_words = []
 
-def play_interruptible(audio_segment: AudioSegment):
-    """Play audio and allow mid-stream interruption via stop_speaking flag."""
-    global stop_speaking
-    p = pyaudio.PyAudio()
-    stream = p.open(
-        format=p.get_format_from_width(audio_segment.sample_width),
-        channels=audio_segment.channels,
-        rate=audio_segment.frame_rate,
-        output=True,
-    )
-    chunk_size = 2048
-    data = audio_segment.raw_data
-    try:
-        for i in range(0, len(data), chunk_size):
-            if stop_speaking:
-                break
-            stream.write(data[i:i+chunk_size])
-    finally:
-        try:
-            stream.stop_stream()
-            stream.close()
-        except Exception:
-            pass
-        p.terminate()
-
-def play_with_bargein(audio_segment: AudioSegment):
-    """No mic pausing here — recognizer keeps running and can interrupt."""
-    play_interruptible(audio_segment)
-    # small cushion to avoid clipping end
-    time.sleep(0.05)
-
-def speak(text: str):
-    """
-    Network TTS with offline fallback.
-    Barge-in enabled: recognizer runs; on user speech -> stop_speech() is called.
-    """
-    global stop_speaking
-    stop_speaking = False
-    _mark_speaking(True)
-    set_last_spoken_text(text)
-
-    if not is_connected():
-        speak_offline(text)
-        return
-
-    async def run_tts():
-        global stop_speaking
-        try:
-            communicate = edge_tts.Communicate(text, voice_name)
-            buffer = io.BytesIO()
-            async for chunk in communicate.stream():
-                if stop_speaking:
-                    print("🚩 Interrupted during streaming.")
-                    return
-                if chunk["type"] == "audio":
-                    buffer.write(chunk["data"])
-
-            if buffer.tell() == 0:
-                print("❌ TTS audio buffer is empty.")
-                speak_offline(text)
-                return
-
-            try:
-                buffer.seek(0)
-                audio = AudioSegment.from_file(buffer, format="mp3")
-            except Exception as decode_error:
-                print("❌ Error decoding MP3 from TTS buffer:", decode_error)
-                speak_offline(text)
-                return
-
-            if not stop_speaking:
-                try:
-                    play_with_bargein(audio)
-                except Exception as playback_error:
-                    print("🔊 Playback error:", playback_error)
-                    speak_offline(text)
-
-        except Exception as tts_error:
-            print("⚠️ edge-tts failed, using offline fallback:", tts_error)
-            speak_offline(text)
-        finally:
-            _mark_speaking(False)
-
-    def run_async():
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(run_tts())
-        except Exception as e:
-            import traceback
-            print(f"[TTS Thread Error] {e}")
-            traceback.print_exc()
-            speak_offline(text)
-        finally:
-            _mark_speaking(False)
-
-    try:
-        threading.Thread(target=run_async, daemon=True).start()
-    except Exception as e:
-        print("[TTS Startup Error]", e)
-        _mark_speaking(False)
-        speak_offline(text)
+def _split_into_words(text):
+    return re.findall(r"\S+", text)
 
 def stop_speech():
-    """External interrupt for barge-in or voice 'stop' command."""
     global stop_speaking
     stop_speaking = True
     try:
         engine.stop()
     except Exception as e:
         print("⚠️ engine.stop() failed:", e)
-    print("⛔ Speech stopped")
+    append_hud_console("⛔ Speech stopped")
+    _mark_speaking(False)
 
-def human_speak(answer: str):
-    """
-    Optional helper: speak a quick filler then the final answer.
-    Both are barge-in capable.
-    """
-    filler = random.choice([
-        "Got it...",
-        "Let me respond...",
-        "One second...",
-        "Alright...",
-        "Okay, here's what I found..."
-    ])
+def clear_resume():
+    _reset_resume_buffers()
 
-    def run_human_speak():
+# ===== OFFLINE (pyttsx3) =====
+
+def _play_words_offline(words, start_index=0):
+    global stop_speaking
+    for i in range(start_index, len(words)):
+        if stop_speaking:
+            append_hud_console(f"⏸️ Interrupted at word {i}: {words[i]}")
+            return i
+        try:
+            engine.say(words[i] + " ")
+            engine.runAndWait()
+        except Exception:
+            traceback.print_exc()
+            return i
+    return len(words)
+
+def _speak_offline_word_aware(text):
+    global _resume_text, _resume_word_index
+    _resume_text = text
+    words = _split_into_words(text)
+    played_to = _play_words_offline(words, _resume_word_index)
+    if played_to >= len(words):
+        _reset_resume_buffers()
+        return True
+    _resume_word_index = played_to
+    _resume_text = text
+    return False
+
+# ===== ONLINE (Edge TTS) =====
+
+def _play_words_online(words, start_index=0):
+    global stop_speaking
+    chunk_size = 6
+    i = start_index
+    while i < len(words):
+        if stop_speaking:
+            append_hud_console(f"⏸️ Interrupted at word {i}: {words[i]}")
+            return i
+        phrase = " ".join(words[i:i+chunk_size])
+        try:
+            audio = asyncio.run(_edge_tts_fetch_audio(phrase))
+            _play_audio_segment(audio)
+        except Exception:
+            traceback.print_exc()
+            return i
+        i += chunk_size
+    return len(words)
+
+async def _edge_tts_fetch_audio(text):
+    buf = io.BytesIO()
+    communicate = edge_tts.Communicate(text, voice_name)
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            buf.write(chunk["data"])
+    buf.seek(0)
+    return AudioSegment.from_file(buf, format="mp3")
+
+def _play_audio_segment(audio_segment):
+    sr = audio_segment.frame_rate
+    ch = audio_segment.channels
+    sw = audio_segment.sample_width
+    raw = audio_segment.raw_data
+    chunk = 2048
+    p = pyaudio.PyAudio()
+    stream = p.open(format=p.get_format_from_width(sw), channels=ch, rate=sr, output=True)
+    try:
+        for i in range(0, len(raw), chunk):
+            if stop_speaking:
+                break
+            stream.write(raw[i:i+chunk])
+    finally:
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
+def _speak_online_word_aware(text):
+    global _resume_text, _resume_word_index
+    _resume_text = text
+    words = _split_into_words(text)
+    played_to = _play_words_online(words, _resume_word_index)
+    if played_to >= len(words):
+        _reset_resume_buffers()
+        return True
+    _resume_word_index = played_to
+    _resume_text = text
+    return False
+
+# ===== Resume =====
+
+def _resume_word_if_any():
+    global _resume_text
+    if not _resume_text:
+        return False
+    if is_connected():
+        return _speak_online_word_aware(_resume_text)
+    else:
+        return _speak_offline_word_aware(_resume_text)
+
+# ===== Public API =====
+
+def speak(text):
+    global stop_speaking
+    with _session_lock:
+        stop_speaking = False
+        _mark_speaking(True)
+        set_last_spoken_text(text)
+
+        def run_tts():
+            try:
+                if is_connected():
+                    append_hud_console(f"🗣️ (online) {text}")
+                    _speak_online_word_aware(text)
+                else:
+                    append_hud_console(f"🗣️ (offline) {text}")
+                    _speak_offline_word_aware(text)
+            finally:
+                _mark_speaking(False)
+                resume_listening()
+
+        threading.Thread(target=run_tts, daemon=True).start()
+
+def resume_if_ignored_interruption():
+    return _resume_word_if_any()
+
+def human_speak(answer):
+    filler = random.choice(["Got it...", "Let me respond...", "One second...", "Alright...", "Okay, here's what I found..."])
+    def run_human():
         global stop_speaking
         try:
-            # Filler
             stop_speaking = False
-            try:
-                speak(filler)
-                time.sleep(1.0)
-            except Exception as filler_error:
-                print("⚠️ Filler speak failed:", filler_error)
-                speak_offline(filler)
-
-            # Final
+            speak(filler)
+            time.sleep(0.7)
             stop_speaking = False
-            final = answer.strip() if answer else "Sorry, I don't have anything useful."
-            try:
-                speak(final)
-            except Exception as final_error:
-                print("❌ Final response failed:", final_error)
-                speak_offline(final)
-
+            speak(answer.strip() if answer else "Sorry, I don't have anything useful.")
         except Exception:
-            import traceback
-            print("❌ human_speak crashed:")
             traceback.print_exc()
-            speak_offline("Sorry, something went wrong.")
-
-    try:
-        threading.Thread(target=run_human_speak, daemon=True).start()
-    except Exception as e:
-        print("[human_speak Thread Error]", e)
-        speak_offline(answer or "Sorry, something went wrong.")
+    threading.Thread(target=run_human, daemon=True).start()

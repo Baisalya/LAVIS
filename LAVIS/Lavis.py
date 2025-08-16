@@ -287,6 +287,10 @@ class LavisRunner:
     def __init__(self):
         self.core = LavisCore()
 
+        # 🔗 Give handle_system access to this runner/core
+        from LAVIS.jarvis.commands import system
+        system.set_core_instance(self)
+
     def run(self):
         while True:
             try:
@@ -302,7 +306,10 @@ class LavisRunner:
                     try:
                         if not command_queue.empty():
                             input_text = command_queue.get()
-                            Clock.schedule_once(lambda dt: self.core.hud_controller.type_live_text(input_text), 0)
+                            Clock.schedule_once(
+                                lambda dt: self.core.hud_controller.type_live_text(input_text), 
+                                0
+                            )
                             print("🎤 Heard:", input_text)
                             self.core.handle_input(input_text)
                         else:
