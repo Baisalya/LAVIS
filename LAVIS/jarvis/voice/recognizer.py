@@ -33,6 +33,24 @@ FREEFORM_MODEL_PATH = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "..", "vosk-model-en-in-0.5", "vosk-model-en-us-daanzu-20200905"
 ))
 COMMANDS_JSON_PATH = os.path.join(os.path.dirname(__file__), "commands.json")
+# ===== Mic Shield for TTS =====
+_listening_paused = False
+
+def pause_listening():
+    """Temporarily mute mic while TTS is speaking."""
+    global _listening_paused
+    _listening_paused = True
+    print("[Recognizer] 🔇 Mic paused (TTS speaking)")
+
+def resume_listening():
+    """Unmute mic after TTS is done or interrupted."""
+    global _listening_paused
+    _listening_paused = False
+    print("[Recognizer] 🎤 Mic resumed")
+
+def is_listening_active():
+    """Check if recognizer should process mic input."""
+    return not _listening_paused
 
 # ===== Public queue + API =====
 command_queue = Queue()
@@ -65,6 +83,15 @@ stop_listening = None
 
 last_spoken_text = ""
 last_spoken_time = 0
+
+# ===== TTS echo-mitigation (ping from speaker.py) =====
+_last_tts_ping_ms = 0
+
+def tts_playback_ping():
+    """Called by speaker.py right before pushing audio to speakers."""
+    global _last_tts_ping_ms
+    _last_tts_ping_ms = int(time.time() * 1000)
+
 
 # ===== Sentence-level awareness =====
 current_spoken_sentence = ""
@@ -109,21 +136,6 @@ def set_session_mode(active: bool):
     print(msg)
     append_hud_console(msg)
     _update_hud_text(f"{'SL:' if active else 'L:'} {'💬 Chatting' if active else '🟢 Listening'} 🎙️")
-
-def pause_listening():
-    global _paused
-    if not _paused:
-        _paused = True
-        append_hud_console("⏸️ Listening paused.")
-        _update_hud_text("⏸️ Listening paused 🎙️")
-
-def resume_listening():
-    global _paused
-    if _paused:
-        print("🔊 Resuming listening...")
-        _paused = False
-        append_hud_console("▶️ Listening resumed.")
-        _update_hud_text("🟢 Listening resumed 🎙️")
 
 def toggle_auth(enabled: bool):
     global AUTHENTICATION_ENABLED
@@ -208,8 +220,13 @@ def _vosk_listen_loop():
             except Exception as e:
                 print(f"🔇 Audio read error: {e}")
                 continue
-
+             # 🔒 Skip mic processing if paused by TTS
+            if not is_listening_active():
+                continue
             rms_level = calculate_rms(data)
+            # Hard mask: if our own TTS just wrote to speakers, ignore this mic frame
+            if speaking and (now_ms - _last_tts_ping_ms) < 250:
+                continue
             if controller and hasattr(controller.hud, "mic_controller"):
                 try:
                     controller.hud.mic_controller.update_level(rms_level)
@@ -217,6 +234,7 @@ def _vosk_listen_loop():
                     pass
 
             now = time.time()
+            now_ms = int(now * 1000)
 
             if _paused:
                 try:

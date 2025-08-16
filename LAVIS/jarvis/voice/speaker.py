@@ -1,4 +1,5 @@
-# ✅ speaker.py — Hybrid Edge TTS (online) + pyttsx3 (offline) with word-aware barge-in + smart resume
+# ✅ speaker.py — Hybrid Edge TTS (online) + pyttsx3 (offline)
+# Word-aware barge-in + smart resume + echo-mitigation pings + no-overlap guard
 import asyncio
 import threading
 import re
@@ -13,6 +14,12 @@ import pyaudio
 
 from LAVIS.jarvis.network import is_connected
 from LAVIS.jarvis.voice.recognizer import set_last_spoken_text, resume_listening
+# Optional ping the recognizer so it can mask mic frames while we're outputting audio
+try:
+    from LAVIS.jarvis.voice.recognizer import tts_playback_ping  # new helper we'll add in recognizer.py
+except Exception:
+    def tts_playback_ping():
+        pass
 
 try:
     from jarvis_hud.main import append_hud_console
@@ -21,7 +28,7 @@ except ImportError:
 
 voice_name = "en-US-AriaNeural"
 engine = pyttsx3.init()
-engine.setProperty('rate', 160)
+engine.setProperty('rate', 190)  # a touch faster to reduce perceived latency
 engine.setProperty('volume', 1.0)
 try:
     voices = engine.getProperty('voices')
@@ -30,16 +37,20 @@ try:
 except Exception as e:
     print(f"[TTS] Voice setup error: {e}")
 
+# ===== Runtime state =====
 stop_speaking = False
 speaking = False
 _session_lock = threading.RLock()
-_resume_text = None
-_resume_word_index = 0
-_current_words = []
+_tts_thread: threading.Thread | None = None
 
-_engine_event_supported = True
+# Resume state (word index works for both online/offline paths)
+_resume_text: str | None = None
+_resume_word_index: int = 0
+_current_words: list[str] = []
 
-def _mark_speaking(active):
+# ===== Internals =====
+
+def _mark_speaking(active: bool):
     global speaking
     speaking = active
 
@@ -49,43 +60,56 @@ def _reset_resume_buffers():
     _resume_word_index = 0
     _current_words = []
 
-def _split_into_words(text):
+def _split_into_words(text: str):
     return re.findall(r"\S+", text)
 
+# ===== External controls =====
+
 def stop_speech():
+    """Hard stop for barge-in; cancels playback and resumes listening immediately."""
     global stop_speaking
     stop_speaking = True
     try:
         engine.stop()
-    except Exception as e:
-        print("⚠️ engine.stop() failed:", e)
+    except Exception:
+        pass
     append_hud_console("⛔ Speech stopped")
     _mark_speaking(False)
-
+    # 🔓 Always resume mic on stop
+    try:
+        from LAVIS.jarvis.voice import recognizer
+        recognizer.resume_listening()
+    except Exception:
+        pass
 def clear_resume():
     _reset_resume_buffers()
 
-# ===== OFFLINE (pyttsx3) =====
+# ===== OFFLINE (pyttsx3, phrase-sized for speed) =====
 
-def _play_words_offline(words, start_index=0):
+def _play_offline_phrases(words: list[str], start_index: int = 0, phrase_size: int = 5) -> int:
+    """Speak with pyttsx3 in short phrases for better prosody/speed. Returns index of next word to speak."""
     global stop_speaking
-    for i in range(start_index, len(words)):
+    i = start_index
+    while i < len(words):
         if stop_speaking:
             append_hud_console(f"⏸️ Interrupted at word {i}: {words[i]}")
             return i
+        phrase = " ".join(words[i:i+phrase_size])
         try:
-            engine.say(words[i] + " ")
+            tts_playback_ping()  # hint to recognizer that TTS output is happening now
+            engine.say(phrase + " ")
             engine.runAndWait()
         except Exception:
             traceback.print_exc()
             return i
+        i += phrase_size
     return len(words)
 
-def _speak_offline_word_aware(text):
+def _speak_offline_word_aware(text: str) -> bool:
     global _resume_text, _resume_word_index
     _resume_text = text
     words = _split_into_words(text)
-    played_to = _play_words_offline(words, _resume_word_index)
+    played_to = _play_offline_phrases(words, _resume_word_index, phrase_size=5)
     if played_to >= len(words):
         _reset_resume_buffers()
         return True
@@ -93,11 +117,11 @@ def _speak_offline_word_aware(text):
     _resume_text = text
     return False
 
-# ===== ONLINE (Edge TTS) =====
+# ===== ONLINE (Edge TTS, chunked phrases) =====
 
-def _play_words_online(words, start_index=0):
+def _play_online_phrases(words: list[str], start_index: int = 0, chunk_size: int = 12) -> int:
+    """Fetch Edge TTS audio for small phrases and play; returns next word index."""
     global stop_speaking
-    chunk_size = 6
     i = start_index
     while i < len(words):
         if stop_speaking:
@@ -113,7 +137,7 @@ def _play_words_online(words, start_index=0):
         i += chunk_size
     return len(words)
 
-async def _edge_tts_fetch_audio(text):
+async def _edge_tts_fetch_audio(text: str) -> AudioSegment:
     buf = io.BytesIO()
     communicate = edge_tts.Communicate(text, voice_name)
     async for chunk in communicate.stream():
@@ -122,7 +146,7 @@ async def _edge_tts_fetch_audio(text):
     buf.seek(0)
     return AudioSegment.from_file(buf, format="mp3")
 
-def _play_audio_segment(audio_segment):
+def _play_audio_segment(audio_segment: AudioSegment):
     sr = audio_segment.frame_rate
     ch = audio_segment.channels
     sw = audio_segment.sample_width
@@ -134,17 +158,21 @@ def _play_audio_segment(audio_segment):
         for i in range(0, len(raw), chunk):
             if stop_speaking:
                 break
+            # Ping recognizer just before pushing audio to speakers to improve echo masking
+            tts_playback_ping()
             stream.write(raw[i:i+chunk])
     finally:
-        stream.stop_stream()
-        stream.close()
+        try:
+            stream.stop_stream(); stream.close()
+        except Exception:
+            pass
         p.terminate()
 
-def _speak_online_word_aware(text):
+def _speak_online_word_aware(text: str) -> bool:
     global _resume_text, _resume_word_index
     _resume_text = text
     words = _split_into_words(text)
-    played_to = _play_words_online(words, _resume_word_index)
+    played_to = _play_online_phrases(words, _resume_word_index, chunk_size=12)
     if played_to >= len(words):
         _reset_resume_buffers()
         return True
@@ -154,8 +182,7 @@ def _speak_online_word_aware(text):
 
 # ===== Resume =====
 
-def _resume_word_if_any():
-    global _resume_text
+def _resume_word_if_any() -> bool:
     if not _resume_text:
         return False
     if is_connected():
@@ -165,12 +192,25 @@ def _resume_word_if_any():
 
 # ===== Public API =====
 
-def speak(text):
-    global stop_speaking
+def speak(text: str):
+    """Main TTS entry — cancels any previous TTS thread to prevent overlap."""
+    global stop_speaking, _tts_thread
     with _session_lock:
+        # Cancel ongoing speech
+        if _tts_thread and _tts_thread.is_alive():
+            stop_speech()
+            _tts_thread.join(timeout=0.2)
+
         stop_speaking = False
         _mark_speaking(True)
         set_last_spoken_text(text)
+
+        # 🔒 Pause recognizer while speaking
+        try:
+            from LAVIS.jarvis.voice import recognizer
+            recognizer.pause_listening()
+        except Exception:
+            pass
 
         def run_tts():
             try:
@@ -182,23 +222,50 @@ def speak(text):
                     _speak_offline_word_aware(text)
             finally:
                 _mark_speaking(False)
-                resume_listening()
+                # 🔓 Resume recognizer after speaking ends
+                try:
+                    from LAVIS.jarvis.voice import recognizer
+                    recognizer.resume_listening()
+                except Exception:
+                    pass
 
-        threading.Thread(target=run_tts, daemon=True).start()
-
-def resume_if_ignored_interruption():
+        _tts_thread = threading.Thread(target=run_tts, daemon=True)
+        _tts_thread.start()
+def resume_if_ignored_interruption() -> bool:
     return _resume_word_if_any()
 
-def human_speak(answer):
-    filler = random.choice(["Got it...", "Let me respond...", "One second...", "Alright...", "Okay, here's what I found..."])
+
+def human_speak(answer: str):
+    """Speak a short filler, then the final answer without overlap/double-voice."""
+    filler = random.choice([
+        "Got it...",
+        "Let me respond...",
+        "One second...",
+        "Alright...",
+        "Okay, here's what I found...",
+    ])
+
     def run_human():
         global stop_speaking
         try:
+            # Filler
             stop_speaking = False
             speak(filler)
-            time.sleep(0.7)
+            # Wait for filler to finish (or timeout) before starting final
+            t0 = time.time()
+            while speaking and time.time() - t0 < 5.0:
+                time.sleep(0.05)
+            # Ensure no overlap
+            stop_speaking = True
+            try:
+                engine.stop()
+            except Exception:
+                pass
+            time.sleep(0.02)
             stop_speaking = False
-            speak(answer.strip() if answer else "Sorry, I don't have anything useful.")
+            final = answer.strip() if answer else "Sorry, I don't have anything useful."
+            speak(final)
         except Exception:
             traceback.print_exc()
+
     threading.Thread(target=run_human, daemon=True).start()
