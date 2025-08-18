@@ -179,7 +179,7 @@ def classify_interruption(text: str) -> str:
     if sum(c.isalpha() for c in t) < max(3, len(t)//3):
         return "ignore"
     return "valuable"
-
+# ===== Main =====
 def _vosk_listen_loop():
     global audio_stream
     _last_partial = ""
@@ -221,30 +221,25 @@ def _vosk_listen_loop():
                 print(f"🔇 Audio read error: {e}")
                 continue
 
-            # 🔒 If muted by TTS, skip processing (light sleep avoids busy loop)
+            # 🔒 If muted by TTS, skip processing
             if not is_listening_active():
                 try:
                     if freeform_recognizer.AcceptWaveform(data):
-                       result = json.loads(freeform_recognizer.Result())
-                       query = (result.get("text") or "").strip().lower()
-                       if query in _STOP_WORDS:
-                          append_hud_console("🛑 STOP detected while TTS paused")
-                          stop_speech()
-                          clear_resume()
-                          set_last_spoken_text("")
+                        result = json.loads(freeform_recognizer.Result())
+                        query = (result.get("text") or "").strip().lower()
+                        if query in _STOP_WORDS:
+                            append_hud_console("🛑 STOP detected while TTS paused")
+                            stop_speech()
+                            clear_resume()
+                            set_last_spoken_text("")
                 except Exception:
                     pass
                 continue
 
-            # Timestamp FIRST (fix: we use now_ms below)
             now = time.time()
             now_ms = int(now * 1000)
 
             rms_level = calculate_rms(data)
-
-            # Hard mask: if our own TTS just wrote to speakers, ignore this mic frame
-            if speaking and (now_ms - _last_tts_ping_ms) < 250:
-                continue
 
             if controller and hasattr(controller.hud, "mic_controller"):
                 try:
@@ -266,58 +261,62 @@ def _vosk_listen_loop():
                 time.sleep(0.05)
                 continue
 
-            # TTS-likeness gate
+            # === TTS-likeness gate (FIXED: still allow barge-in while speaking) ===
             tts_like = is_tts_voice(data)
-            if tts_like:
-                if speaking:
-                    now_ms = int(time.time() * 1000)
-                    if last_tts_frame_time == 0:
-                        last_tts_frame_time = now_ms
-                    if rms_level < 1200 and (now_ms - last_tts_frame_time) < TTS_MASK_DEBOUNCE_MS:
-                        continue
-                else:
-                    continue
-            else:
-                last_tts_frame_time = 0
+            if tts_like and not speaking:
+                continue
 
-            # === While assistant is speaking: treat input as possible barge-in ===
+            # === While assistant is speaking: barge-in handling (FIXED) ===
             if speaking:
                 if freeform_recognizer.AcceptWaveform(data):
                     try:
                         result = json.loads(freeform_recognizer.Result())
                         query = (result.get("text") or "").strip().lower()
 
-                        # Echo suppression: ignore phrases similar to current TTS (full text or current sentence)
-                        if fuzz.ratio(query, last_spoken_text) > 85 or fuzz.ratio(query, current_spoken_sentence) > 85:
+                        if query:
+                            # Suppress echo
+                            if fuzz.ratio(query, last_spoken_text) > 85 or fuzz.ratio(query, current_spoken_sentence) > 85:
+                                continue
+
+                            print(f"[BARGE-IN LISTENING] Heard while speaking → {query}")
+
+                            category = classify_interruption(query)
+
+                            if category == "stop":
+                                append_hud_console("🛑 Barge-in: STOP detected. Cutting TTS (no resume).")
+                                append_hud_console(f"(was speaking sentence: '{current_spoken_sentence}')")
+                                stop_speech()
+                                clear_resume()
+                                set_last_spoken_text("")
+                                continue
+
+                            if category == "valuable":
+                                append_hud_console(f"⚡ Barge-in: valuable input → '{query}'")
+                                append_hud_console(f"(was speaking sentence: '{current_spoken_sentence}')")
+                                stop_speech()
+
+                                if controller:
+                                    Clock.schedule_once(lambda dt: controller.update(query, category="fallback", typing=True))
+
+                                command_queue.put_nowait(query)
+                                set_session_mode(True)
+
+                                def _resume_after_query(dt):
+                                    from LAVIS.jarvis.voice.speaker import resume_if_ignored_interruption
+                                    resumed = resume_if_ignored_interruption()
+                                    if resumed:
+                                        append_hud_console("▶️ Resumed previous speech after handling query.")
+
+                                Clock.schedule_once(_resume_after_query, 0.5)
+
+                                last_speech_time = now
+                                command_recognizer.Reset()
+                                freeform_recognizer.Reset()
+                                continue
+
+                            append_hud_console("🔄 Interruption ignored (noise). Resuming speech.")
+                            resume_if_ignored_interruption()
                             continue
-
-                        category = classify_interruption(query)
-
-                        if category == "stop":
-                            append_hud_console("🛑 Barge-in: STOP detected. Cutting TTS (no resume).")
-                            append_hud_console(f"(was speaking sentence: '{current_spoken_sentence}')")
-                            stop_speech()
-                            clear_resume()
-                            set_last_spoken_text("")
-                            continue
-
-                        if category == "valuable":
-                            append_hud_console(f"⚡ Barge-in: valuable input → '{query}'")
-                            append_hud_console(f"(was speaking sentence: '{current_spoken_sentence}')")
-                            stop_speech()
-                            clear_resume()
-                            if controller:
-                                Clock.schedule_once(lambda dt: controller.update(query, category="fallback", typing=True))
-                            command_queue.put_nowait(query)
-                            set_session_mode(True)
-                            last_speech_time = now
-                            command_recognizer.Reset()
-                            freeform_recognizer.Reset()
-                            continue
-
-                        append_hud_console("🔄 Interruption ignored (noise). Resuming speech.")
-                        resume_if_ignored_interruption()
-                        continue
 
                     except Exception as e:
                         append_hud_console(f"[Barge-in parse error] {e}")
@@ -325,6 +324,7 @@ def _vosk_listen_loop():
                     try:
                         partial = (json.loads(freeform_recognizer.PartialResult()).get("partial") or "").strip().lower()
                         if partial:
+                            print(f"[BARGE-IN PARTIAL] {partial}")
                             _update_hud_text(f"🗣️ {partial}")
                             last_speech_time = now
                     except Exception:
@@ -350,7 +350,7 @@ def _vosk_listen_loop():
                 except Exception as e:
                     append_hud_console(f"[Command Error] {e}")
 
-            # === Freeform recognition lane ===
+            # === Freeform lane ===
             if freeform_recognizer.AcceptWaveform(data):
                 try:
                     result = json.loads(freeform_recognizer.Result())

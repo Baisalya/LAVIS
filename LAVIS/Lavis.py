@@ -1,4 +1,4 @@
-# Lavis.py (Modified)
+# Lavis.py (Polished)
 
 import os, re, time, logging, threading, datetime
 from fuzzywuzzy import fuzz
@@ -10,7 +10,12 @@ from LAVIS.jarvis.voice.speaker import speak
 from LAVIS.jarvis.commands.commands import handle_command
 from LAVIS.jarvis.apps.chatbot import chatbot, train_chatbot
 from LAVIS.jarvis.commands.apps import open_windows_app, get_start_menu_apps
-from LAVIS.jarvis.voice.recognizer import start_background_listening, stop_background_listening, command_queue, resume_listening
+from LAVIS.jarvis.voice.recognizer import (
+    start_background_listening,
+    stop_background_listening,
+    command_queue,
+    resume_listening,
+)
 from LAVIS.jarvis.nlp.intent_detector import detect_intent, match_hardcoded_command, resolve_app_name
 from LAVIS.jarvis.web.fallback import handle_fallback
 from LAVIS.jarvis.commands.explorer import handle_explorer
@@ -41,13 +46,12 @@ AUDIO_STARTUP = os.path.abspath("LAVIS/lavis_start.mp3")
 USER_NAME = "Lala"
 
 
-
-
 class LavisCore:
     def __init__(self):
         self.session_state = "sleep"
         self.control_mode = "normal"
         self.last_wake_time = 0
+        self.in_conversation = False  # ✅ tracks if user is mid-chat
 
         # LLM fallback handler
         self.llm = LLMFallback()
@@ -77,7 +81,9 @@ class LavisCore:
                 Clock.schedule_once(lambda dt: show_hud_reply(message), 0)
                 speak(message)
             except Exception as e:
+                # ✅ show HUD error if speech fails
                 print(f"[HUD Speak Error] {e}")
+                Clock.schedule_once(lambda dt: show_hud_reply("⚠️ Speech failed."), 0)
         threading.Thread(target=speak_thread, daemon=True).start()
 
     def welcome(self):
@@ -135,6 +141,7 @@ class LavisCore:
 
             elif re.search(r"\b(jarvis\s+)?(sleep|go to sleep|shutdown|rest)\b", text):
                 self.session_state = "sleep"
+                self.in_conversation = False
                 self.hud_speak(f"Okay {USER_NAME}, I'm going to sleep now 🛌")
                 Clock.schedule_once(lambda dt: update_hud_status("Sleep"), 0)
                 return True
@@ -148,7 +155,7 @@ class LavisCore:
         match = re.search(r"\b(open|start|launch|run)\b\s+(.+)", command.lower())
         return match.group(2).strip() if match else ""
 
-    def handle_input(self, input_text):
+    def handle_input(self, input_text, skip_echo=False):  # ✅ skip_echo from recognizer barge-in
         try:
             if self.check_wake_phrase(input_text):
                 return
@@ -165,9 +172,17 @@ class LavisCore:
                 return
 
             command = re.sub(rf"\b{WAKE_WORD}\b", "", input_text, flags=re.IGNORECASE).strip() or input_text
-            Clock.schedule_once(lambda dt: self.hud_controller.update(command, category="command", typing=True), 0)
+            if not skip_echo:  # ✅ avoid double-echo if recognizer already displayed
+                Clock.schedule_once(lambda dt: self.hud_controller.update(command, category="command", typing=True), 0)
+
             command_lower = command.lower().strip()
 
+            # Conversation flagging
+            self.in_conversation = True
+
+            # (control mode logic unchanged…)
+            # [ ... same as before ... ]
+            
             # Control modes
             if "activate hand control" in command_lower:
                 self.hud_speak("Activating hand control mode. Use your hand to control the system.")
