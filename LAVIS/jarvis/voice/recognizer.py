@@ -33,6 +33,7 @@ FREEFORM_MODEL_PATH = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "..", "vosk-model-en-in-0.5", "vosk-model-en-us-daanzu-20200905"
 ))
 COMMANDS_JSON_PATH = os.path.join(os.path.dirname(__file__), "commands.json")
+
 # ===== Mic Shield for TTS =====
 _listening_paused = False
 
@@ -74,7 +75,7 @@ def inject_typed_query(text: str):
 # ===== Shared state =====
 audio_stream = None
 _listening = False
-_paused = False
+_paused = False        # kept for compatibility with HUD text; not used to gate mic (we use is_listening_active)
 _in_session = False
 _indicator_thread = None
 _listener_thread = None
@@ -91,7 +92,6 @@ def tts_playback_ping():
     """Called by speaker.py right before pushing audio to speakers."""
     global _last_tts_ping_ms
     _last_tts_ping_ms = int(time.time() * 1000)
-
 
 # ===== Sentence-level awareness =====
 current_spoken_sentence = ""
@@ -220,21 +220,37 @@ def _vosk_listen_loop():
             except Exception as e:
                 print(f"🔇 Audio read error: {e}")
                 continue
-             # 🔒 Skip mic processing if paused by TTS
+
+            # 🔒 If muted by TTS, skip processing (light sleep avoids busy loop)
             if not is_listening_active():
+                try:
+                    if freeform_recognizer.AcceptWaveform(data):
+                       result = json.loads(freeform_recognizer.Result())
+                       query = (result.get("text") or "").strip().lower()
+                       if query in _STOP_WORDS:
+                          append_hud_console("🛑 STOP detected while TTS paused")
+                          stop_speech()
+                          clear_resume()
+                          set_last_spoken_text("")
+                except Exception:
+                    pass
                 continue
+
+            # Timestamp FIRST (fix: we use now_ms below)
+            now = time.time()
+            now_ms = int(now * 1000)
+
             rms_level = calculate_rms(data)
+
             # Hard mask: if our own TTS just wrote to speakers, ignore this mic frame
             if speaking and (now_ms - _last_tts_ping_ms) < 250:
                 continue
+
             if controller and hasattr(controller.hud, "mic_controller"):
                 try:
                     controller.hud.mic_controller.update_level(rms_level)
                 except Exception:
                     pass
-
-            now = time.time()
-            now_ms = int(now * 1000)
 
             if _paused:
                 try:
@@ -250,10 +266,11 @@ def _vosk_listen_loop():
                 time.sleep(0.05)
                 continue
 
+            # TTS-likeness gate
             tts_like = is_tts_voice(data)
             if tts_like:
                 if speaking:
-                    now_ms = time.time() * 1000
+                    now_ms = int(time.time() * 1000)
                     if last_tts_frame_time == 0:
                         last_tts_frame_time = now_ms
                     if rms_level < 1200 and (now_ms - last_tts_frame_time) < TTS_MASK_DEBOUNCE_MS:
@@ -263,13 +280,14 @@ def _vosk_listen_loop():
             else:
                 last_tts_frame_time = 0
 
+            # === While assistant is speaking: treat input as possible barge-in ===
             if speaking:
                 if freeform_recognizer.AcceptWaveform(data):
                     try:
                         result = json.loads(freeform_recognizer.Result())
                         query = (result.get("text") or "").strip().lower()
 
-                        # Echo suppression: now checks both full text & current sentence
+                        # Echo suppression: ignore phrases similar to current TTS (full text or current sentence)
                         if fuzz.ratio(query, last_spoken_text) > 85 or fuzz.ratio(query, current_spoken_sentence) > 85:
                             continue
 
@@ -312,6 +330,7 @@ def _vosk_listen_loop():
                     except Exception:
                         pass
 
+            # === Command grammar lane ===
             if command_recognizer.AcceptWaveform(data):
                 try:
                     result = json.loads(command_recognizer.Result())
@@ -331,6 +350,7 @@ def _vosk_listen_loop():
                 except Exception as e:
                     append_hud_console(f"[Command Error] {e}")
 
+            # === Freeform recognition lane ===
             if freeform_recognizer.AcceptWaveform(data):
                 try:
                     result = json.loads(freeform_recognizer.Result())
@@ -361,6 +381,7 @@ def _vosk_listen_loop():
                 except Exception as e:
                     append_hud_console(f"[Freeform Error] {e}")
 
+            # === Partial updates ===
             try:
                 partial_result = json.loads(freeform_recognizer.PartialResult())
                 partial = (partial_result.get("partial") or "").strip().lower()
@@ -372,6 +393,7 @@ def _vosk_listen_loop():
             except Exception:
                 pass
 
+            # === Silence reset ===
             if now - last_speech_time > silence_timeout:
                 _last_partial = ""
                 command_recognizer.Reset()
@@ -447,7 +469,7 @@ def start_background_listening():
     _recognizer_watchdog.start()
 
 def stop_background_listening():
-    global stop_listening, _indicator_thread, _listener_thread, audio_stream, _recognizer_watchdog
+    global stop_listening, _indicator_thread, _listener_thread, audio_stream, _recognizer_watchdog, _listening
     _listening = False
     if stop_listening:
         stop_listening()
@@ -463,4 +485,7 @@ def stop_background_listening():
         except Exception:
             pass
     if _recognizer_watchdog:
-        _recognizer_watchdog.stop()
+        try:
+            _recognizer_watchdog.stop()
+        except Exception:
+            pass
