@@ -371,5 +371,8 @@
   "hoping you will grow": "conversation",
   "well of": "explorer",
   "can you sit down": "input_control",
-  "like this": "conversation"
+  "like this": "conversation",
+  "okay okay": "conversation",
+  "people gotta buy": "explorer",
+  "i heard": "conversation"
 }

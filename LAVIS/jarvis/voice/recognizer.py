@@ -1,4 +1,6 @@
-# ✅ recognizer.py — Continuous listening with smart barge-in + resume decisions + real-time sentence tracking
+# Recognizer (quickfix v2)
+# Small fixes: correct listening animation string, increase RMS sustain to reduce false pauses,
+# and add AUTO_RESUME_SILENCE for snappier auto-resume.
 
 import os
 import json
@@ -33,31 +35,89 @@ FREEFORM_MODEL_PATH = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "..", "vosk-model-en-in-0.5", "vosk-model-en-us-daanzu-20200905"
 ))
 COMMANDS_JSON_PATH = os.path.join(os.path.dirname(__file__), "commands.json")
+import time
+from kivy.clock import Clock
 
-# ===== Mic Shield for TTS =====
-_listening_paused = False
+# === New debounce globals ===
+_last_auto_resume_ms = 0
+_AUTO_RESUME_DEBOUNCE_MS = 500
+
+
+def _safe_resume_call(resume_func=None):
+    """
+    Debounced call to resume. Accepts an optional resume_func.
+    If resume_func is None it will import speaker.resume_if_ignored_interruption.
+    Returns the resume result (True/False) or False on error.
+    """
+    global _last_auto_resume_ms
+    now_ms = int(time.time() * 1000)
+    if now_ms - _last_auto_resume_ms < _AUTO_RESUME_DEBOUNCE_MS:
+        append_hud_console("⏯️ Skipping rapid duplicate auto-resume (debounced).")
+        return False
+    _last_auto_resume_ms = now_ms
+
+    try:
+        if resume_func is None:
+            # lazy import to avoid circular import at module load time
+            from LAVIS.jarvis.voice import speaker as speaker_mod
+            return speaker_mod.resume_if_ignored_interruption()
+        else:
+            return resume_func()
+    except Exception as e:
+        append_hud_console(f"[Auto-resume error] {e}")
+        return False
+def schedule_auto_resume(delay: float = 1.5):
+    """After pause, wait briefly then auto-resume if user said nothing."""
+    def _check_and_resume():
+        time.sleep(delay)
+        try:
+            from LAVIS.jarvis.voice import speaker as speaker_mod
+            if not speaker_mod.speaking:  # only if nothing resumed already
+                resumed = _safe_resume_call(speaker_mod.resume_if_ignored_interruption)
+                if resumed:
+                    append_hud_console("▶️ Auto-resumed after brief silence.")
+        except Exception as e:
+            append_hud_console(f"[Auto-resume error] {e}")
+    threading.Thread(target=_check_and_resume, daemon=True).start()
+
+def handle_auto_resume(barge_paused, now, last_speech_time, AUTO_RESUME_SILENCE):
+    """Called in vosk loop to handle auto-resume-after-silence logic."""
+    from LAVIS.jarvis import speaker as speaker_mod
+    if barge_paused and not speaker_mod.speaking:
+        if now - last_speech_time > AUTO_RESUME_SILENCE:
+            append_hud_console("⏯️ Auto-resuming previous speech after brief silence...")
+            resumed = _safe_resume_call()
+
+            if resumed:
+                append_hud_console("▶️ Auto-resume successful.")
+            barge_paused = False
+            last_speech_time = now
+    return barge_paused, last_speech_time
+
+
+def schedule_resume_after_noise():
+    """Schedule a delayed resume when noise interruption is ignored."""
+    Clock.schedule_once(lambda dt: _safe_resume_call(), 0.05)
+
+# ===== Mic Shield for TTS =====n_listening_paused = False
 
 def pause_listening():
-    """Temporarily mute mic while TTS is speaking."""
     global _listening_paused
     _listening_paused = True
     print("[Recognizer] 🔇 Mic paused (TTS speaking)")
 
 def resume_listening():
-    """Unmute mic after TTS is done or interrupted."""
     global _listening_paused
     _listening_paused = False
     print("[Recognizer] 🎤 Mic resumed")
 
 def is_listening_active():
-    """Check if recognizer should process mic input."""
     return not _listening_paused
 
 # ===== Public queue + API =====
 command_queue = Queue()
 
 def inject_typed_query(text: str):
-    """Typing interrupt API: call from UI/main to inject a query that should interrupt speech exactly like a spoken barge-in."""
     if not text:
         return
     try:
@@ -75,7 +135,7 @@ def inject_typed_query(text: str):
 # ===== Shared state =====
 audio_stream = None
 _listening = False
-_paused = False        # kept for compatibility with HUD text; not used to gate mic (we use is_listening_active)
+_paused = False
 _in_session = False
 _indicator_thread = None
 _listener_thread = None
@@ -89,12 +149,10 @@ last_spoken_time = 0
 _last_tts_ping_ms = 0
 
 def tts_playback_ping():
-    """Called by speaker.py right before pushing audio to speakers."""
     global _last_tts_ping_ms
     _last_tts_ping_ms = int(time.time() * 1000)
 
-# ===== Sentence-level awareness =====
-current_spoken_sentence = ""
+# ===== Sentence-level awareness =====ncurrent_spoken_sentence = ""
 current_sentence_time = 0
 
 def set_last_spoken_text(text):
@@ -103,10 +161,6 @@ def set_last_spoken_text(text):
     last_spoken_time = time.time()
 
 def set_current_spoken_sentence(text):
-    """
-    Called by speaker.py before each sentence starts speaking.
-    Allows recognizer to suppress echo & resume from exact point.
-    """
     global current_spoken_sentence, current_sentence_time
     current_spoken_sentence = (text or "").lower().strip()
     current_sentence_time = time.time()
@@ -179,16 +233,31 @@ def classify_interruption(text: str) -> str:
     if sum(c.isalpha() for c in t) < max(3, len(t)//3):
         return "ignore"
     return "valuable"
+
+# ===== Barge-in tuning =====
+BARGE_IN_RMS_THRESHOLD = 1200
+BARGE_IN_RMS_SUSTAIN = 3
+BARGE_IN_MIN_PARTIAL_CHARS = 2
+BARGE_IN_MIN_PARTIAL_ALPHA = 2
+AUTO_RESUME_SILENCE = 0.6  # seconds of silence after pause before auto-resume
+
 # ===== Main =====
 def _vosk_listen_loop():
     global audio_stream
     _last_partial = ""
     p = None
 
-    from LAVIS.jarvis.voice.speaker import stop_speech, speaking, resume_if_ignored_interruption, clear_resume
+    import LAVIS.jarvis.voice.speaker as speaker_mod
+    stop_speech = speaker_mod.stop_speech
+    pause_speech = getattr(speaker_mod, 'pause_speech', None)
+    resume_if_ignored_interruption = speaker_mod.resume_if_ignored_interruption
+    clear_resume = speaker_mod.clear_resume
 
     last_tts_frame_time = 0.0
     TTS_MASK_DEBOUNCE_MS = 150
+
+    _rms_sustain_count = 0
+    barge_pause_start = 0.0
 
     try:
         p = pyaudio.PyAudio()
@@ -214,6 +283,8 @@ def _vosk_listen_loop():
         silence_timeout = 2.0
         controller = get_hud_controller()
 
+        barge_paused = False
+
         while _listening:
             try:
                 data = audio_stream.read(2000, exception_on_overflow=False)
@@ -221,7 +292,6 @@ def _vosk_listen_loop():
                 print(f"🔇 Audio read error: {e}")
                 continue
 
-            # 🔒 If muted by TTS, skip processing
             if not is_listening_active():
                 try:
                     if freeform_recognizer.AcceptWaveform(data):
@@ -261,76 +331,151 @@ def _vosk_listen_loop():
                 time.sleep(0.05)
                 continue
 
-            # === TTS-likeness gate (FIXED: still allow barge-in while speaking) ===
             tts_like = is_tts_voice(data)
-            if tts_like and not speaking:
+            if tts_like and not speaker_mod.speaking:
                 continue
 
-            # === While assistant is speaking: barge-in handling (FIXED) ===
-            if speaking:
+            if speaker_mod.speaking:
+                try:
+                    is_tts_frame = is_tts_voice(data)
+                except Exception:
+                    is_tts_frame = False
+
+                if not barge_paused and not is_tts_frame:
+                    if rms_level >= BARGE_IN_RMS_THRESHOLD:
+                        _rms_sustain_count += 1
+                        if _rms_sustain_count >= BARGE_IN_RMS_SUSTAIN:
+                            append_hud_console("⏸️ Sustained RMS user speech detected — pausing TTS")
+                            try:
+                                if pause_speech:
+                                    pause_speech()
+                                else:
+                                    stop_speech()
+                            except Exception:
+                                pass
+                            barge_paused = True
+                            barge_pause_start = now
+                            _rms_sustain_count = 0
+                            schedule_auto_resume(1.5)
+
+                    else:
+                        _rms_sustain_count = 0
+
+                try:
+                    partial_for_pause = (json.loads(freeform_recognizer.PartialResult()).get("partial") or "").strip().lower()
+                except Exception:
+                    partial_for_pause = ""
+
+                if partial_for_pause:
+                    alpha_count = sum(c.isalpha() for c in partial_for_pause)
+                    if not barge_paused and alpha_count >= BARGE_IN_MIN_PARTIAL_ALPHA and len(partial_for_pause) >= BARGE_IN_MIN_PARTIAL_CHARS:
+                        append_hud_console("⏸️ Detected partial user speech — pausing TTS")
+                        try:
+                            if pause_speech:
+                                pause_speech()
+                            else:
+                                stop_speech()
+                        except Exception:
+                            pass
+                        barge_paused = True
+                        barge_pause_start = now
+                        last_speech_time = now
+                        schedule_auto_resume(1.5)
+
+                    print(f"[BARGE-IN PARTIAL] {partial_for_pause}")
+                    _update_hud_text(f"🗣️ {partial_for_pause}")
+                    
+
+                # Auto-resume: if we paused but no valuable final arrives and there's silence for AUTO_RESUME_SILENCE,
+                # resume the previous speech automatically.
+                if barge_paused and not speaker_mod.speaking:
+                    # if we've seen silence since pause, resume
+                    if now - last_speech_time > AUTO_RESUME_SILENCE:
+                        append_hud_console("⏯️ Auto-resuming previous speech after brief silence...")
+                        try:
+                            resumed = _safe_resume_call()
+
+                            if resumed:
+                                append_hud_console("▶️ Auto-resume successful.")
+                        except Exception as e:
+                            append_hud_console(f"[Auto-resume error] {e}")
+                        barge_paused = False
+                        # reset last_speech_time so we don't immediately trigger again
+                        last_speech_time = now
+
                 if freeform_recognizer.AcceptWaveform(data):
                     try:
                         result = json.loads(freeform_recognizer.Result())
                         query = (result.get("text") or "").strip().lower()
 
                         if query:
-                            # Suppress echo
-                            if fuzz.ratio(query, last_spoken_text) > 85 or fuzz.ratio(query, current_spoken_sentence) > 85:
-                                continue
-
                             print(f"[BARGE-IN LISTENING] Heard while speaking → {query}")
+                            last_speech_time = now
 
-                            category = classify_interruption(query)
+                        if query and (fuzz.ratio(query, last_spoken_text) > 85 or fuzz.ratio(query, current_spoken_sentence) > 85):
+                            print(f"[DEBUG] Suppressed echo while speaking: {query}")
+                            continue
 
-                            if category == "stop":
-                                append_hud_console("🛑 Barge-in: STOP detected. Cutting TTS (no resume).")
-                                append_hud_console(f"(was speaking sentence: '{current_spoken_sentence}')")
-                                stop_speech()
-                                clear_resume()
-                                set_last_spoken_text("")
-                                continue
+                        category = classify_interruption(query)
 
-                            if category == "valuable":
-                                append_hud_console(f"⚡ Barge-in: valuable input → '{query}'")
-                                append_hud_console(f"(was speaking sentence: '{current_spoken_sentence}')")
-                                stop_speech()
+                        if category == "stop":
+                            append_hud_console("🛑 Barge-in: STOP detected. Cutting TTS (no resume).")
+                            append_hud_console(f"(was speaking sentence: '{current_spoken_sentence}')")
+                            stop_speech()
+                            clear_resume()
+                            set_last_spoken_text("")
+                            barge_paused = False
+                            continue
 
-                                if controller:
-                                    Clock.schedule_once(lambda dt: controller.update(query, category="fallback", typing=True))
+                        if category == "valuable":
+                            append_hud_console(f"⚡ Barge-in: valuable input → '{query}'")
+                            append_hud_console(f"(was speaking sentence: '{current_spoken_sentence}')")
 
-                                command_queue.put_nowait(query)
-                                set_session_mode(True)
+                            try:
+                                if pause_speech:
+                                    pause_speech()
+                                else:
+                                    stop_speech()
+                            except Exception:
+                                pass
 
-                                def _resume_after_query(dt):
-                                    from LAVIS.jarvis.voice.speaker import resume_if_ignored_interruption
-                                    resumed = resume_if_ignored_interruption()
+                            if controller:
+                                Clock.schedule_once(lambda dt: controller.update(query, category="fallback", typing=True))
+                            command_queue.put_nowait(query)
+                            set_session_mode(True)
+
+                            def _check_and_resume(dt=None):
+                                try:
+                                    if getattr(speaker_mod, "speaking", False):
+                                        Clock.schedule_once(_check_and_resume, 0.25)
+                                        return
+                                    resumed = _safe_resume_call()
+
                                     if resumed:
                                         append_hud_console("▶️ Resumed previous speech after handling query.")
+                                except Exception as e:
+                                    append_hud_console(f"[Resume Error] {e}")
 
-                                Clock.schedule_once(_resume_after_query, 0.5)
+                            Clock.schedule_once(_check_and_resume, 0.25)
 
-                                last_speech_time = now
-                                command_recognizer.Reset()
-                                freeform_recognizer.Reset()
-                                continue
-
-                            append_hud_console("🔄 Interruption ignored (noise). Resuming speech.")
-                            resume_if_ignored_interruption()
+                            barge_paused = False
+                            last_speech_time = now
+                            command_recognizer.Reset()
+                            freeform_recognizer.Reset()
                             continue
+
+                        append_hud_console("🔄 Interruption ignored (noise). Scheduling resume of speech.")
+                        Clock.schedule_once(lambda dt: _safe_resume_call(), 0.05)
+                        barge_paused = False
+                        continue
 
                     except Exception as e:
                         append_hud_console(f"[Barge-in parse error] {e}")
-                else:
-                    try:
-                        partial = (json.loads(freeform_recognizer.PartialResult()).get("partial") or "").strip().lower()
-                        if partial:
-                            print(f"[BARGE-IN PARTIAL] {partial}")
-                            _update_hud_text(f"🗣️ {partial}")
-                            last_speech_time = now
-                    except Exception:
-                        pass
 
-            # === Command grammar lane ===
+            else:
+                if barge_paused:
+                    barge_paused = False
+
             if command_recognizer.AcceptWaveform(data):
                 try:
                     result = json.loads(command_recognizer.Result())
@@ -350,7 +495,6 @@ def _vosk_listen_loop():
                 except Exception as e:
                     append_hud_console(f"[Command Error] {e}")
 
-            # === Freeform lane ===
             if freeform_recognizer.AcceptWaveform(data):
                 try:
                     result = json.loads(freeform_recognizer.Result())
@@ -381,7 +525,6 @@ def _vosk_listen_loop():
                 except Exception as e:
                     append_hud_console(f"[Freeform Error] {e}")
 
-            # === Partial updates ===
             try:
                 partial_result = json.loads(freeform_recognizer.PartialResult())
                 partial = (partial_result.get("partial") or "").strip().lower()
@@ -393,7 +536,6 @@ def _vosk_listen_loop():
             except Exception:
                 pass
 
-            # === Silence reset ===
             if now - last_speech_time > silence_timeout:
                 _last_partial = ""
                 command_recognizer.Reset()
@@ -431,7 +573,7 @@ def _recognizer_restart():
     time.sleep(0.5)
     start_background_listening()
 
-# ===== Startup/shutdown =====
+# ===== Startup/shutdown =====n
 def start_background_listening():
     global _listening, _indicator_thread, _listener_thread, stop_listening, _recognizer_watchdog
     if _listening:
