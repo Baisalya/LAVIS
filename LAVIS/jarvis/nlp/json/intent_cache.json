@@ -374,5 +374,16 @@
   "like this": "conversation",
   "okay okay": "conversation",
   "people gotta buy": "explorer",
-  "i heard": "conversation"
+  "i heard": "conversation",
+  "a study buddy": "learning",
+  "the bull": "explorer",
+  "male study": "explorer",
+  "an interesting statement": "explorer",
+  "i'm not sure what you": "conversation",
+  "of my god": "conversation",
+  "hey a": "conversation",
+  "some history": "explorer",
+  "tel meres duty": "command",
+  "to talk": "conversation",
+  "i would like to speak": "conversation"
 }

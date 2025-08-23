@@ -235,11 +235,11 @@ def classify_interruption(text: str) -> str:
     return "valuable"
 
 # ===== Barge-in tuning =====
-BARGE_IN_RMS_THRESHOLD = 1200
+BARGE_IN_RMS_THRESHOLD = 1400
 BARGE_IN_RMS_SUSTAIN = 3
 BARGE_IN_MIN_PARTIAL_CHARS = 2
 BARGE_IN_MIN_PARTIAL_ALPHA = 2
-AUTO_RESUME_SILENCE = 0.6  # seconds of silence after pause before auto-resume
+AUTO_RESUME_SILENCE = 0.9  # seconds of silence after pause before auto-resume
 
 # ===== Main =====
 def _vosk_listen_loop():
@@ -253,8 +253,8 @@ def _vosk_listen_loop():
     resume_if_ignored_interruption = speaker_mod.resume_if_ignored_interruption
     clear_resume = speaker_mod.clear_resume
 
-    last_tts_frame_time = 0.0
-    TTS_MASK_DEBOUNCE_MS = 150
+    # Keep existing debounce but use timestamp from speaker module if available
+    TTS_MASK_DEBOUNCE_MS = 700
 
     _rms_sustain_count = 0
     barge_pause_start = 0.0
@@ -289,9 +289,10 @@ def _vosk_listen_loop():
             try:
                 data = audio_stream.read(2000, exception_on_overflow=False)
             except Exception as e:
-                print(f"🔇 Audio read error: {e}")
+                append_hud_console(f"🔇 Audio read error: {e}")
                 continue
 
+            # quick path: if listening is disabled we still want to catch STOP words
             if not is_listening_active():
                 try:
                     if freeform_recognizer.AcceptWaveform(data):
@@ -331,17 +332,44 @@ def _vosk_listen_loop():
                 time.sleep(0.05)
                 continue
 
-            tts_like = is_tts_voice(data)
-            if tts_like and not speaker_mod.speaking:
+            # --- Robust TTS masking: combine heuristic detector + last TTS ping timestamp ---
+            try:
+                tts_like = is_tts_voice(data)
+            except Exception:
+                tts_like = False
+
+            # If speaker module exposes a last ping timestamp use it; otherwise default 0
+            last_tts_ping_ms = getattr(speaker_mod, "_last_tts_ping_ms", 0)
+            try:
+                tts_recent = (now_ms - int(last_tts_ping_ms)) < TTS_MASK_DEBOUNCE_MS
+            except Exception:
+                tts_recent = False
+
+            # Only treat frame as TTS if either heuristic or recent ping AND we are actually speaking.
+            is_tts_frame = (tts_like or tts_recent) and getattr(speaker_mod, "speaking", False)
+
+            if is_tts_frame:
+                # skip processing this frame entirely — almost certainly our own TTS playback
                 continue
 
+            # --- handle when assistant is speaking (barge-in detection) ---
             if speaker_mod.speaking:
+                # re-evaluate per-frame TTS-ness safely
                 try:
-                    is_tts_frame = is_tts_voice(data)
+                    per_frame_tts_like = is_tts_voice(data)
                 except Exception:
-                    is_tts_frame = False
+                    per_frame_tts_like = False
+                try:
+                    last_tts_ping_ms = getattr(speaker_mod, "_last_tts_ping_ms", 0)
+                    per_frame_tts_recent = (now_ms - int(last_tts_ping_ms)) < TTS_MASK_DEBOUNCE_MS
+                except Exception:
+                    per_frame_tts_recent = False
 
-                if not barge_paused and not is_tts_frame:
+                is_tts_frame_now = (per_frame_tts_like or per_frame_tts_recent)
+
+                # If not a TTS frame and not already paused for barge-in, evaluate user RMS/partials
+                if speaker_mod.speaking and not barge_paused and not is_tts_frame_now:
+
                     if rms_level >= BARGE_IN_RMS_THRESHOLD:
                         _rms_sustain_count += 1
                         if _rms_sustain_count >= BARGE_IN_RMS_SUSTAIN:
@@ -357,10 +385,11 @@ def _vosk_listen_loop():
                             barge_pause_start = now
                             _rms_sustain_count = 0
                             schedule_auto_resume(1.5)
-
                     else:
+                        # reset sustain counter when below threshold
                         _rms_sustain_count = 0
 
+                # Partial-based immediate barge-in
                 try:
                     partial_for_pause = (json.loads(freeform_recognizer.PartialResult()).get("partial") or "").strip().lower()
                 except Exception:
@@ -384,30 +413,25 @@ def _vosk_listen_loop():
 
                     print(f"[BARGE-IN PARTIAL] {partial_for_pause}")
                     _update_hud_text(f"🗣️ {partial_for_pause}")
-                    
 
-                # Auto-resume: if we paused but no valuable final arrives and there's silence for AUTO_RESUME_SILENCE,
-                # resume the previous speech automatically.
+                # Auto-resume after brief silence if TTS was paused but assistant is no longer speaking
                 if barge_paused and not speaker_mod.speaking:
-                    # if we've seen silence since pause, resume
                     if now - last_speech_time > AUTO_RESUME_SILENCE:
                         append_hud_console("⏯️ Auto-resuming previous speech after brief silence...")
                         try:
                             resumed = _safe_resume_call()
-
                             if resumed:
                                 append_hud_console("▶️ Auto-resume successful.")
                         except Exception as e:
                             append_hud_console(f"[Auto-resume error] {e}")
                         barge_paused = False
-                        # reset last_speech_time so we don't immediately trigger again
                         last_speech_time = now
 
+                # While assistant speaking, check freeform final results for interrupts
                 if freeform_recognizer.AcceptWaveform(data):
                     try:
                         result = json.loads(freeform_recognizer.Result())
                         query = (result.get("text") or "").strip().lower()
-
                         if query:
                             print(f"[BARGE-IN LISTENING] Heard while speaking → {query}")
                             last_speech_time = now
@@ -450,7 +474,6 @@ def _vosk_listen_loop():
                                         Clock.schedule_once(_check_and_resume, 0.25)
                                         return
                                     resumed = _safe_resume_call()
-
                                     if resumed:
                                         append_hud_console("▶️ Resumed previous speech after handling query.")
                                 except Exception as e:
@@ -473,9 +496,12 @@ def _vosk_listen_loop():
                         append_hud_console(f"[Barge-in parse error] {e}")
 
             else:
+                # not speaking: ensure barge_paused isn't stuck
                 if barge_paused:
                     barge_paused = False
+                    _rms_sustain_count = 0
 
+            # --- Command grammar recognizer (priority) ---
             if command_recognizer.AcceptWaveform(data):
                 try:
                     result = json.loads(command_recognizer.Result())
@@ -495,6 +521,7 @@ def _vosk_listen_loop():
                 except Exception as e:
                     append_hud_console(f"[Command Error] {e}")
 
+            # --- Freeform final results (when not speaking) ---
             if freeform_recognizer.AcceptWaveform(data):
                 try:
                     result = json.loads(freeform_recognizer.Result())
@@ -525,6 +552,7 @@ def _vosk_listen_loop():
                 except Exception as e:
                     append_hud_console(f"[Freeform Error] {e}")
 
+            # --- Partial updates for HUD ---
             try:
                 partial_result = json.loads(freeform_recognizer.PartialResult())
                 partial = (partial_result.get("partial") or "").strip().lower()
@@ -536,6 +564,7 @@ def _vosk_listen_loop():
             except Exception:
                 pass
 
+            # reset recognizers after extended silence
             if now - last_speech_time > silence_timeout:
                 _last_partial = ""
                 command_recognizer.Reset()

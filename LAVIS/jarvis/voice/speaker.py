@@ -1,6 +1,8 @@
-# ✅ speaker.py — Humanized playback + multi-voice support (v4)
-# - Adds multiple voice profiles (Edge TTS + pyttsx3) with runtime switching and per-call overrides
+# ✅ speaker.py — Humanized playback + multi-voice support (v6 FINAL with smart resume fix)
+# - Multiple voice profiles (Edge TTS + pyttsx3) with runtime switching and per-call overrides
 # - Keeps previous token-based double-play prevention and humanized cadence
+# - Fix: Resume now continues exactly from the last played word, prevents duplicate resumes.
+# - Added: _trace_resume_caller, _last_played_word_index tracking, resume guards.
 # - Public API:
 #     set_voice_profile(name)           -> set default voice profile
 #     list_voice_profiles()             -> list available profiles
@@ -15,6 +17,7 @@ import random
 import traceback
 import io
 import queue
+import inspect
 from typing import List, Tuple, Optional, Dict
 
 import edge_tts
@@ -46,8 +49,11 @@ except ImportError:
     def append_hud_console(msg): print(msg)
 
 ALLOW_BARGE_IN = True
-# put near the top of speaker.py (with other globals)
 _resume_lock = threading.Lock()
+_resume_in_progress = False
+_last_played_word_index = 0
+
+# Debug helper
 def _trace_resume_caller(tag: str):
     try:
         frm = inspect.stack()[2]
@@ -55,8 +61,8 @@ def _trace_resume_caller(tag: str):
     except Exception:
         caller = "unknown"
     append_hud_console(f"[TTS-TRACE] {tag} called by {caller} @ {int(time.time()*1000)}")
+
 # === Voice profile system ===
-# A voice profile contains the Edge TTS voice name and an optional pyttsx3 voice index + rate
 VOICE_PROFILES: Dict[str, Dict] = {
     "aria_female": {
         "edge": "en-US-AriaNeural",
@@ -79,7 +85,6 @@ VOICE_PROFILES: Dict[str, Dict] = {
 }
 _current_voice_profile = "aria_female"
 
-# Public helpers
 def list_voice_profiles():
     return list(VOICE_PROFILES.keys())
 
@@ -95,7 +100,6 @@ def set_voice_profile(name: str) -> bool:
 def get_current_voice_profile() -> Dict:
     return VOICE_PROFILES.get(_current_voice_profile, VOICE_PROFILES[list(VOICE_PROFILES.keys())[0]])
 
-# --- internal helper to resolve a voice name for Edge and to configure pyttsx3 ---
 def _resolve_edge_voice(profile_name: Optional[str]) -> str:
     if profile_name and profile_name in VOICE_PROFILES:
         return VOICE_PROFILES[profile_name]["edge"]
@@ -117,13 +121,12 @@ def _configure_pyttsx3_voice(engine: pyttsx3.Engine, profile_name: Optional[str]
     except Exception as e:
         append_hud_console(f"[TTS] pyttsx3 voice config failed: {e}")
 
-# ---- Existing playback/token safety & humanization variables -----------------------------------
 VOICE_NAME = _resolve_edge_voice(None)
 OFFLINE_RATE = 190
 OFFLINE_VOLUME = 1.0
 OFFLINE_VOICE_INDEX = 1
-ONLINE_CHUNK_WORDS = 12
-OFFLINE_PHRASE_WORDS = 5
+ONLINE_CHUNK_WORDS = 40
+OFFLINE_PHRASE_WORDS = 30
 PY_AUDIO_CHUNK = 2048
 FILLER_MAX_WAIT = 5.0
 
@@ -152,7 +155,9 @@ def _next_playback_token() -> int:
         _playback_token += 1
         return _playback_token
 
+
 # --- pyttsx3 init (unchanged, but we configure voice per-play) ---
+
 def _init_pyttsx3():
     global _engine
     if _engine is not None:
@@ -286,15 +291,45 @@ def stop_speech():
     append_hud_console("⛔ Speech stopped")
 
 def pause_speech():
-    global stop_speaking, _paused_for_barge_in
+    global stop_speaking, _paused_for_barge_in, _resume_word_index, _playback_token, _tts_thread
     _paused_for_barge_in = True
     stop_speaking = True
+
+    # Snapshot where playback left off (for resume)
+    _resume_word_index = _last_played_word_index
+
+    # Bump playback token to force any in-flight playback loops to stop quickly.
+    # This prevents the old playback from continuing while a resume starts.
+    try:
+        with _playback_lock:
+            _playback_token += 1
+            append_hud_console(f"[TTS] playback token bumped -> {_playback_token}")
+    except Exception:
+        _playback_token += 1
+        append_hud_console(f"[TTS] playback token bumped (no lock available) -> {_playback_token}")
+
+    # Stop pyttsx3 engine if active
     try:
         eng = _init_pyttsx3()
         if eng is not None:
             eng.stop()
     except Exception as e:
-        append_hud_console(f"[TTS] pause failed: {e}")
+        append_hud_console(f"[TTS] pause engine.stop() failed: {e}")
+
+    # If a TTS thread exists, give it a short grace period to terminate so audio device is released.
+    try:
+        if _tts_thread is not None and isinstance(_tts_thread, threading.Thread):
+            if _tts_thread.is_alive():
+                append_hud_console("[TTS] waiting for previous TTS thread to finish (short join)")
+                _tts_thread.join(timeout=0.5)
+                if _tts_thread.is_alive():
+                    append_hud_console("[TTS] previous TTS thread still alive after join; continuing anyway.")
+                else:
+                    append_hud_console("[TTS] previous TTS thread joined successfully.")
+    except Exception as e:
+        append_hud_console(f"[TTS] error while joining TTS thread: {e}")
+
+    # Reflect paused state
     _mark_speaking(False)
     append_hud_console("⏸️ Speech paused (barge-in)")
 
@@ -302,29 +337,65 @@ def resume_if_ignored_interruption() -> bool:
     return _resume_word_if_any()
 
 # --- Playback helpers that check token and accept a profile_name ---------------------------------
-
 def _play_audio_segment(audio_segment: AudioSegment, token: int):
+    """
+    Play a pydub AudioSegment but guard with token/stop flags, log start/end and errors,
+    and skip / return early if audio is empty.
+    """
     if token != _playback_token:
+        append_hud_console("[TTS] _play_audio_segment: token mismatch, aborting segment.")
         return
+
+    if audio_segment is None:
+        append_hud_console("[TTS] _play_audio_segment: audio_segment is None, aborting.")
+        return
+
+    try:
+        raw = audio_segment.raw_data
+        if not raw or len(raw) == 0 or audio_segment.duration_seconds == 0:
+            append_hud_console(f"[TTS] _play_audio_segment: empty audio (duration {audio_segment.duration_seconds}), abort.")
+            return
+    except Exception:
+        # if audio doesn't have expected attributes — still try but warn
+        append_hud_console("[TTS] _play_audio_segment: audio sanity check failed (continuing)")
+
     sr = audio_segment.frame_rate
     ch = audio_segment.channels
     sw = audio_segment.sample_width
-    raw = audio_segment.raw_data
-    p = pyaudio.PyAudio()
-    stream = p.open(format=p.get_format_from_width(sw), channels=ch, rate=sr, output=True)
+
+    append_hud_console(f"[TTS] playing audio segment (len={len(raw)} bytes, dur={audio_segment.duration_seconds:.3f}s)")
+
+    p = None
+    stream = None
     try:
+        p = pyaudio.PyAudio()
+        stream = p.open(format=p.get_format_from_width(sw), channels=ch, rate=sr, output=True)
         for i in range(0, len(raw), PY_AUDIO_CHUNK):
             if stop_speaking or token != _playback_token:
+                append_hud_console("[TTS] playback interrupted (stop or token changed) while writing chunk.")
                 break
             tts_playback_ping()
-            stream.write(raw[i:i+PY_AUDIO_CHUNK])
+            try:
+                stream.write(raw[i:i+PY_AUDIO_CHUNK])
+            except Exception as e:
+                append_hud_console(f"[TTS] Error writing audio chunk: {e}")
+                break
+    except Exception as e:
+        append_hud_console(f"[TTS] audio playback open/write failed: {e}")
     finally:
         try:
-            stream.stop_stream()
-            stream.close()
+            if stream is not None:
+                stream.stop_stream()
+                stream.close()
         except Exception:
             pass
-        p.terminate()
+        try:
+            if p is not None:
+                p.terminate()
+        except Exception:
+            pass
+
+    append_hud_console("[TTS] finished audio segment")
 
 async def _edge_tts_fetch_audio(text: str, voice_name: str) -> AudioSegment:
     buf = io.BytesIO()
@@ -347,33 +418,56 @@ def _adaptive_chunk_size(words: List[str], index: int, default: int) -> int:
     return default
 
 # Online play that checks token and adds short pauses, accepts profile_name
-def _play_online_phrases(words: List[str], start_index: int = 0, chunk_size: int = ONLINE_CHUNK_WORDS, token: int = 0, profile_name: Optional[str] = None) -> int:
-    global stop_speaking
+def _play_online_phrases(
+    words: List[str],
+    start_index: int = 0,
+    chunk_size: int = ONLINE_CHUNK_WORDS,
+    token: int = 0,
+    profile_name: Optional[str] = None
+) -> int:
+    global stop_speaking, _last_played_word_index
     i = start_index
     voice_name = _resolve_edge_voice(profile_name)
+
     while i < len(words):
         if stop_speaking or token != _playback_token:
-            append_hud_console(f"⏸️ Interrupted at word {i}: {words[i] if i < len(words) else ''}")
+            _last_played_word_index = i
             return i
+
+        # Highlight current sentence (for HUD / transcript display)
         sentence_here = _find_sentence_for_index(i)
         if sentence_here:
             try:
                 set_current_spoken_sentence(sentence_here)
             except Exception:
                 pass
+
         adaptive = _adaptive_chunk_size(words, i, chunk_size)
         phrase = " ".join(words[i:i+adaptive])
+
         try:
             audio = asyncio.run(_edge_tts_fetch_audio(phrase, voice_name))
+
+            # ✅ FIXED indentation here
+            if audio is None or (hasattr(audio, "duration_seconds") and audio.duration_seconds == 0):
+                append_hud_console("[TTS] _edge_tts_fetch_audio returned empty audio for phrase. Aborting playback for this chunk.")
+                _last_played_word_index = i
+                return i
+
             _play_audio_segment(audio, token)
+
             if token == _playback_token and not stop_speaking:
-                time.sleep(random.uniform(0.05, 0.18))
+                time.sleep(random.uniform(0.05, 0.4))
                 if phrase.rstrip().endswith(('.', '!', '?')):
-                    time.sleep(random.uniform(0.12, 0.28))
+                    time.sleep(random.uniform(0.4, 0.8))
+
         except Exception:
             traceback.print_exc()
             return i
+
         i += adaptive
+        _last_played_word_index = i
+
     return len(words)
 
 def _speak_online_word_aware(text: str, token: int, profile_name: Optional[str] = None) -> bool:
@@ -390,11 +484,12 @@ def _speak_online_word_aware(text: str, token: int, profile_name: Optional[str] 
 
 # Offline: queue (token, phrase, profile_name)
 def _play_offline_phrases(words: List[str], start_index: int = 0, phrase_size: int = OFFLINE_PHRASE_WORDS, token: int = 0, profile_name: Optional[str] = None) -> int:
-    global stop_speaking
+    global stop_speaking, _last_played_word_index
     _ensure_offline_worker()
     i = start_index
     while i < len(words):
         if stop_speaking or token != _playback_token:
+            _last_played_word_index = i
             return i
         sentence_here = _find_sentence_for_index(i)
         if sentence_here:
@@ -407,6 +502,7 @@ def _play_offline_phrases(words: List[str], start_index: int = 0, phrase_size: i
         _offline_queue.put((token, phrase, profile_name))
         time.sleep(random.uniform(0.02, 0.06))
         i += size
+        _last_played_word_index = i
     return len(words)
 
 def _speak_offline_word_aware(text: str, token: int, profile_name: Optional[str] = None) -> bool:
@@ -423,45 +519,31 @@ def _speak_offline_word_aware(text: str, token: int, profile_name: Optional[str]
 
 # Resume will clear paused state and attempt to play using current token and profile
 def _resume_word_if_any() -> bool:
-    """
-    Resume saved TTS from last saved index, but avoid duplicate/responsive concurrent resumes.
-    Returns True if resumed/completed, False otherwise.
-
-    This implementation acquires a non-blocking lock so only one resume can run at once.
-    It also checks `_paused_for_barge_in` and `speaking` to avoid duplicate or spurious resumes.
-    """
-    global stop_speaking, _paused_for_barge_in
-
-    # quick pre-checks
+    global stop_speaking, _paused_for_barge_in, _resume_in_progress
     if not _resume_text:
         append_hud_console("▶️ Resume requested but no resume text available.")
         return False
 
-    # Trace who asked to resume (useful when debugging duplicate triggers)
-    _trace_resume_caller("resume_request")
-
-    # try to acquire the resume lock without blocking (if already running, skip)
+    # Try to acquire resume lock; if not available, skip.
     if not _resume_lock.acquire(blocking=False):
-        append_hud_console("▶️ Resume already in progress — skipping duplicate resume call.")
+        append_hud_console("▶️ Resume already locked — skipping.")
         return False
 
+    _resume_in_progress = True
     try:
-        # If already speaking, skip (this is defensive; speaking should be False when resuming)
+        # Double-check runtime guards while we hold the lock so no race can slip in.
         if speaking:
             append_hud_console("▶️ Resume requested but speaking already True — skipping.")
             return False
-
-        # Require that we were paused for barge-in; otherwise it's likely a duplicate/spurious resume
         if not _paused_for_barge_in:
-            append_hud_console("▶️ Resume requested but not in paused-for-barge-in state — skipping.")
+            append_hud_console("▶️ Resume requested but not paused-for-barge-in — skipping.")
             return False
 
-        # mark paused/resume state BEFORE starting playback to prevent races
+        # Clear paused-for-barge-in and start resume playback
         _paused_for_barge_in = False
         stop_speaking = False
-        _mark_speaking(True)   # set speaking True immediately to prevent other resumes
-        append_hud_console("▶️ Resuming previous speech from last saved index...")
-
+        _mark_speaking(True)
+        _trace_resume_caller("resume_request")
         token = _playback_token
         stored_profile = _current_voice_profile
 
@@ -471,8 +553,8 @@ def _resume_word_if_any() -> bool:
             else:
                 result = _speak_offline_word_aware(_resume_text, token, profile_name=stored_profile)
 
-            # If we completed immediately, clear speaking flag; otherwise the playback flow will clear it.
             if result:
+                # played to end immediately
                 _mark_speaking(False)
                 append_hud_console("▶️ Resume completed (finished immediately).")
                 return True
@@ -486,9 +568,9 @@ def _resume_word_if_any() -> bool:
             return False
 
     finally:
-        # keep lock held while playback is active; release only when resume function returns.
-        # Note: because the playback functions are synchronous here, the finally will run after playback ends.
+        _resume_in_progress = False
         try:
+            # release the lock (safe even if already unlocked in rare cases)
             if _resume_lock.locked():
                 _resume_lock.release()
         except Exception:
