@@ -385,5 +385,10 @@
   "some history": "explorer",
   "tel meres duty": "command",
   "to talk": "conversation",
-  "i would like to speak": "conversation"
+  "i would like to speak": "conversation",
+  "real story": "explorer",
+  "is your creative": "conversation",
+  "i agree": "conversation",
+  "i'm not a problem or": "conversation",
+  "i bet": "conversation"
 }
