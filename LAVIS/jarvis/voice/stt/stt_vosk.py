@@ -8,14 +8,16 @@ from .stt_base import STTBase
 def _default_command_model_path():
     return os.path.abspath(os.path.join(
         os.path.dirname(__file__),
-       "..", "..", "..", "vosk-model-en-in-0.5", "vosk-model-small-en-us-0.15"
+               "..", "..", "..", "vosk-model-en-in-0.5", "vosk-model-en-us-daanzu-20200905"
+
     ))
 
 
 def _default_freeform_model_path():
     return os.path.abspath(os.path.join(
         os.path.dirname(__file__),
-       "..", "..", "..", "vosk-model-en-in-0.5", "vosk-model-en-us-daanzu-20200905"
+               "..", "..", "..", "vosk-model-en-in-0.5", "vosk-model-small-en-us-0.15"
+
     ))
 
 

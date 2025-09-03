@@ -3,8 +3,7 @@ import json
 from LAVIS.jarvis.apps.userai.user_profile import load_user_profile, build_system_prompt
 
 GROQ_API_KEY = "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"
-GROQ_MODEL = "llama3-70b-8192"
-
+GROQ_MODEL = "llama-3.3-70b-versatile"
 def ask_groq(prompt: str) -> str:
     if not GROQ_API_KEY:
         print("❌ Groq API key not set.")
