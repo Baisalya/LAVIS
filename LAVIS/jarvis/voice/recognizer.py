@@ -28,6 +28,8 @@ except ImportError:
 # Import STT plugin
 from LAVIS.jarvis.voice.stt.stt_vosk import VoskSTT   # <<-- Swap this out in future
 from LAVIS.jarvis.voice.stt.stt_google import GoogleSTT
+from LAVIS.jarvis.voice.stt.stt_fasterwhisper import FasterWhisperSTT
+
 
 # ===== Settings =====
 AUTHENTICATION_ENABLED = False
@@ -221,12 +223,10 @@ def _vosk_listen_loop():
     import LAVIS.jarvis.voice.speaker as speaker_mod
     stop_speech = speaker_mod.stop_speech
     pause_speech = getattr(speaker_mod, 'pause_speech', None)
-    resume_if_ignored_interruption = speaker_mod.resume_if_ignored_interruption
     clear_resume = speaker_mod.clear_resume
 
     # Keep existing debounce but use timestamp from speaker module if available
     TTS_MASK_DEBOUNCE_MS = 700
-
     _rms_sustain_count = 0
     barge_pause_start = 0.0
 
@@ -243,6 +243,7 @@ def _vosk_listen_loop():
         mic_track = PyAudioStreamTrack(rate=SAMPLE_RATE, chunk=FRAME_SAMPLES)
         aec_track = MicEchoCancellingTrack(mic_track)
 
+        # === Init VAD lazily (only once) ===
         try:
             vad  # if already exists at module level
         except NameError:
@@ -251,11 +252,9 @@ def _vosk_listen_loop():
 
         # === Create recognizers once ===
         from LAVIS.jarvis.network import is_connected
-        # choose STT plugin: offline fallback to Vosk
-        append_hud_console("📴 Offline: Using VoskSTT.")
-        command_recognizer = VoskSTT(mode="command")
-        freeform_recognizer = VoskSTT(mode="freeform")
-
+        append_hud_console("📴 Offline: Using VoskSTT (single).")
+        recognizer = VoskSTT(mode="freeform")
+        #recognizer = FasterWhisperSTT(model_name="small", device="cpu", compute_type="int8")
         last_speech_time = time.time()
         silence_timeout = 2.0
         controller = get_hud_controller()
@@ -272,8 +271,8 @@ def _vosk_listen_loop():
             # quick path: if listening is disabled we still want to catch STOP words
             if not is_listening_active():
                 try:
-                    if freeform_recognizer.accept_waveform(data):
-                        query = freeform_recognizer.get_result()
+                    if recognizer.accept_waveform(data):
+                        query, category = recognizer.get_result()
                         if query in _STOP_WORDS:
                             append_hud_console("🛑 STOP detected while TTS paused")
                             stop_speech()
@@ -287,7 +286,6 @@ def _vosk_listen_loop():
             now_ms = int(now * 1000)
 
             rms_level = calculate_rms(data)
-
             if controller and hasattr(controller.hud, "mic_controller"):
                 try:
                     controller.hud.mic_controller.update_level(rms_level)
@@ -296,8 +294,8 @@ def _vosk_listen_loop():
 
             if _paused:
                 try:
-                    if freeform_recognizer.accept_waveform(data):
-                        query = freeform_recognizer.get_result()
+                    if recognizer.accept_waveform(data):
+                        query, category = recognizer.get_result()
                         if query in _STOP_WORDS:
                             append_hud_console("🛑 Voice stop detected while paused.")
                             stop_speech()
@@ -307,7 +305,7 @@ def _vosk_listen_loop():
                 time.sleep(0.05)
                 continue
 
-            # --- Robust TTS masking (unchanged) ---
+            # --- Mask TTS ---
             try:
                 tts_like = is_tts_voice(data)
             except Exception:
@@ -323,181 +321,42 @@ def _vosk_listen_loop():
             if is_tts_frame:
                 continue
 
-            # --- Use Silero VAD on this frame ---
+            # --- VAD check ---
             try:
                 speech_here = vad.is_speech(data)
-            except Exception as e:
+            except Exception:
                 speech_here = (rms_level >= BARGE_IN_RMS_THRESHOLD)
 
-            # If assistant is speaking, we still need barge-in detection
-            if speaker_mod.speaking:
-                if speech_here and not barge_paused:
-                    append_hud_console("⏸️ VAD detected user speech while TTS -> pausing TTS")
-                    try:
-                        if pause_speech:
-                            pause_speech()
-                        else:
-                            stop_speech()
-                    except Exception:
-                        pass
-                    barge_paused = True
-                    barge_pause_start = now
-                    last_speech_time = now
-                    schedule_auto_resume(1.5)
-                    freeform_recognizer.accept_waveform(data)
-                    command_recognizer.accept_waveform(data)
-                    continue
+            # --- Feed recognizer ---
+            if speech_here:
+                recognizer.accept_waveform(data)
 
+            if recognizer.accept_waveform(data):
                 try:
-                    partial_for_pause = freeform_recognizer.get_partial()
-                except Exception:
-                    partial_for_pause = ""
-
-                if partial_for_pause:
-                    alpha_count = sum(c.isalpha() for c in partial_for_pause)
-                    if not barge_paused and alpha_count >= BARGE_IN_MIN_PARTIAL_ALPHA and len(partial_for_pause) >= BARGE_IN_MIN_PARTIAL_CHARS:
-                        append_hud_console("⏸️ Detected partial user speech — pausing TTS")
-                        try:
-                            if pause_speech:
-                                pause_speech()
-                            else:
-                                stop_speech()
-                        except Exception:
-                            pass
-                        barge_paused = True
-                        barge_pause_start = now
-                        last_speech_time = now
-                        schedule_auto_resume(1.5)
-
-                    print(f"[BARGE-IN PARTIAL] {partial_for_pause}")
-                    _update_hud_text(f"🗣️ {partial_for_pause}")
-
-                if freeform_recognizer.accept_waveform(data):
-                    try:
-                        query = freeform_recognizer.get_result()
-                        if query:
-                            print(f"[BARGE-IN LISTENING] Heard while speaking → {query}")
-                            last_speech_time = now
-
-                        if query and (fuzz.ratio(query, last_spoken_text) > 85 or fuzz.ratio(query, current_spoken_sentence) > 85):
-                            print(f"[DEBUG] Suppressed echo while speaking: {query}")
-                            continue
-
-                        category = classify_interruption(query)
-
-                        if category == "stop":
-                            append_hud_console("🛑 Barge-in: STOP detected. Cutting TTS (no resume).")
-                            append_hud_console(f"(was speaking sentence: '{current_spoken_sentence}')")
-                            stop_speech()
-                            clear_resume()
-                            set_last_spoken_text("")
-                            barge_paused = False
-                            continue
-
-                        if category == "valuable":
-                            append_hud_console(f"⚡ Barge-in: valuable input → '{query}'")
-                            append_hud_console(f"(was speaking sentence: '{current_spoken_sentence}')")
-
-                            try:
-                                if pause_speech:
-                                    pause_speech()
-                                else:
-                                    stop_speech()
-                            except Exception:
-                                pass
-
-                            if controller:
-                                Clock.schedule_once(lambda dt: controller.update(query, category="fallback", typing=True))
-                            command_queue.put_nowait(query)
-                            set_session_mode(True)
-
-                            def _check_and_resume(dt=None):
-                                try:
-                                    if getattr(speaker_mod, "speaking", False):
-                                        Clock.schedule_once(_check_and_resume, 0.25)
-                                        return
-                                    resumed = _safe_resume_call()
-                                    if resumed:
-                                        append_hud_console("▶️ Resumed previous speech after handling query.")
-                                except Exception as e:
-                                    append_hud_console(f"[Resume Error] {e}")
-
-                            Clock.schedule_once(_check_and_resume, 0.25)
-
-                            barge_paused = False
-                            last_speech_time = now
-                            command_recognizer.reset()
-                            freeform_recognizer.reset()
-                            continue
-
-                        append_hud_console("🔄 Interruption ignored (noise). Scheduling resume of speech.")
-                        Clock.schedule_once(lambda dt: _safe_resume_call(), 0.05)
-                        barge_paused = False
-                        continue
-
-                    except Exception as e:
-                        append_hud_console(f"[Barge-in parse error] {e}")
-
-            else:
-                if barge_paused:
-                    barge_paused = False
-                    _rms_sustain_count = 0
-
-                if speech_here:
-                    command_recognizer.accept_waveform(data)
-                    freeform_recognizer.accept_waveform(data)
-
-                    if command_recognizer.accept_waveform(b"") is False:
-                        pass
-
-                if command_recognizer.accept_waveform(data):
-                    try:
-                        query = command_recognizer.get_result()
+                    query, category = recognizer.get_result()
+                    if query:
                         if fuzz.ratio(query, last_spoken_text) > 85 or fuzz.ratio(query, current_spoken_sentence) > 85:
                             continue
-                        if query:
-                            if controller:
-                                Clock.schedule_once(lambda dt: controller.update(query, category="command", typing=True))
-                            command_queue.put_nowait(query)
-                            set_last_spoken_text(query)
-                            command_recognizer.reset()
-                            freeform_recognizer.reset()
-                            last_speech_time = now
-                            continue
-                    except Exception as e:
-                        append_hud_console(f"[Command Error] {e}")
-
-                if freeform_recognizer.accept_waveform(data):
-                    try:
-                        query = freeform_recognizer.get_result()
-                        if fuzz.ratio(query, last_spoken_text) > 85 or fuzz.ratio(query, current_spoken_sentence) > 85:
-                            continue
-
                         if query in _STOP_WORDS:
-                            append_hud_console("🛑 Voice stop detected (freeform).")
+                            append_hud_console("🛑 Voice stop detected.")
                             stop_speech()
                             clear_resume()
                             set_last_spoken_text("")
                             continue
 
-                        if query:
-                            set_session_mode(True)
-                            if controller:
-                                Clock.schedule_once(lambda dt: controller.update(query, category="fallback", typing=True))
-                            command_queue.put_nowait(query)
-                            set_last_spoken_text(query)
-                            Clock.schedule_once(lambda dt: set_session_mode(False), 10)
-                            if controller:
-                                Clock.schedule_once(lambda dt: controller.clear_live_text(), 0)
-                            command_recognizer.reset()
-                            freeform_recognizer.reset()
-                            last_speech_time = now
-                            continue
-                    except Exception as e:
-                        append_hud_console(f"[Freeform Error] {e}")
+                        if controller:
+                            Clock.schedule_once(lambda dt: controller.update(query, category=category, typing=True))
+                        command_queue.put_nowait(query)
+                        set_last_spoken_text(query)
+                        recognizer.reset()
+                        last_speech_time = now
+                        continue
+                except Exception as e:
+                    append_hud_console(f"[Recognizer Error] {e}")
 
+            # --- Partials ---
             try:
-                partial = freeform_recognizer.get_partial()
+                partial = recognizer.get_partial()
                 if partial and partial != _last_partial:
                     _last_partial = partial
                     append_hud_console(f"🔎 Partial: {partial}")
@@ -506,10 +365,10 @@ def _vosk_listen_loop():
             except Exception:
                 pass
 
+            # --- Reset on silence ---
             if now - last_speech_time > silence_timeout:
                 _last_partial = ""
-                command_recognizer.reset()
-                freeform_recognizer.reset()
+                recognizer.reset()
                 last_speech_time = now
 
     except Exception:
