@@ -243,7 +243,6 @@ def _vosk_listen_loop():
         mic_track = PyAudioStreamTrack(rate=SAMPLE_RATE, chunk=FRAME_SAMPLES)
         aec_track = MicEchoCancellingTrack(mic_track)
 
-        # === Init VAD lazily (only once) ===
         try:
             vad  # if already exists at module level
         except NameError:
@@ -264,7 +263,6 @@ def _vosk_listen_loop():
 
         while _listening:
             try:
-                # Get echo-cancelled audio frame
                 data = aec_track.recv_pcm16_sync()
             except Exception as e:
                 append_hud_console(f"🔇 Audio read error: {e}")

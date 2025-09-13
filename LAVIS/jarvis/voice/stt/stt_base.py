@@ -16,7 +16,6 @@ class STTBase(ABC):
 
     @abstractmethod
     def get_partial(self) -> str:
-        """Return current partial transcription (if available)."""
         pass
 
     @abstractmethod
