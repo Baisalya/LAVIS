@@ -1,6 +1,4 @@
 import requests
-import json
-from LAVIS.jarvis.apps.userai.user_profile import load_user_profile, build_system_prompt
 
 # 🔑 Gemini API Key (from Google AI Studio)
 GEMINI_API_KEY = "AIzaSyCf29NxuCUdPvdwSdxyoHTjW-G10e6EiGo"
@@ -10,25 +8,19 @@ GEMINI_MODEL = "gemini-1.5-flash-latest"  # Or "models/gemini-1.5-pro-latest"
 
 def ask_gemini(prompt: str) -> str:
     """
-    Send a prompt to Google's Gemini API and return the response.
+    Send a prompt directly to Google's Gemini API and return the response.
     """
     if not GEMINI_API_KEY:
         print("❌ Gemini API key not set.")
         return None
 
-    # 🔁 Load latest profile & build system context dynamically
-    profile = load_user_profile()
-    system_context = build_system_prompt(profile)
-
     try:
         response = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}",
-            headers={
-                "Content-Type": "application/json"
-            },
+            headers={"Content-Type": "application/json"},
             json={
                 "contents": [
-                    {"role": "user", "parts": [{"text": f"{system_context}\n{prompt}"}]}
+                    {"role": "user", "parts": [{"text": prompt}]}
                 ]
             },
             timeout=15
@@ -54,7 +46,7 @@ def ask_gemini(prompt: str) -> str:
 
 if __name__ == "__main__":
     while True:
-        user_input = input("You: ")
+        user_input = input("You: ").strip()
         if user_input.lower() in ["exit", "quit"]:
             break
         reply = ask_gemini(user_input)

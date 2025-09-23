@@ -476,5 +476,7 @@
   "hello legs": "conversation",
   "of poor on google": "explorer",
   "tell me every": "explorer",
-  "bell me too early": "command"
+  "bell me too early": "command",
+  "okay daddy": "conversation",
+  "a little": "input_control"
 }
