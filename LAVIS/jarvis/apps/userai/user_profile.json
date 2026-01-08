@@ -82,9 +82,9 @@
         }
       },
       "friends": {
-        "Titi": {
-          "name": "Amita ",
-          "nickname": "Pritam",
+        "l": {
+          "name": "L ",
+          "nickname": "L",
           "relationship": " friend",
           "traits": ["loyal", "funny", "energetic"],
           "hobbies": ["gaming", "reels"],
@@ -95,8 +95,8 @@
             "angry": ["code problem", "office problems"]
           }
         },
-        "Ritu": {
-          "name": "Rituparna Parija",
+        "B": {
+          "name": "B",
           "nickname": "Panda",
           "relationship": "best friend",
           "traits": ["intelligent", "quiet"],
