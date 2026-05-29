@@ -7,6 +7,12 @@ import io
 from pydub import AudioSegment
 import pyaudio
 import time
+import queue
+import logging
+
+# Silence comtypes verbose debug logs
+logging.getLogger('comtypes').setLevel(logging.WARNING)
+logging.getLogger('comtypes.client').setLevel(logging.WARNING)
 
 # -------------------------
 # Base Interface
@@ -76,55 +82,60 @@ class EdgeTTS(BaseTTS):
                     except Exception:
                         pass
 
-            # If stop requested before we finished streaming, bail out.
-            if self._stop_event.is_set():
-                return
-
-            # Play buffer (mp3) using pydub + pyaudio but write raw in chunks
-            if buf.getbuffer().nbytes == 0:
+            if self._stop_event.is_set() or buf.getbuffer().nbytes == 0:
+                self._speaking.clear()
                 return
 
             buf.seek(0)
-            audio = AudioSegment.from_file(buf, format="mp3")
-
-            # prepare pyaudio stream
-            p = pyaudio.PyAudio()
-            format_ = p.get_format_from_width(audio.sample_width)
-            channels = audio.channels
-            rate = audio.frame_rate
-
-            stream = None
-            try:
-                stream = p.open(format=format_, channels=channels, rate=rate, output=True)
-                raw = audio.raw_data
-                chunk_size = 2048
-                pos = 0
-                while pos < len(raw):
-                    if self._stop_event.is_set():
-                        break
-                    end = min(len(raw), pos + chunk_size)
-                    # write chunk
-                    stream.write(raw[pos:end])
-                    pos = end
-                    # tiny sleep to allow other threads to run and for ping logic
-                    time.sleep(0.001)
-            finally:
+            
+            # Run the blocking PyAudio playback in a separate thread
+            # to avoid blocking the asyncio event loop!
+            def _play_audio():
+                stream = None
+                p = None
                 try:
-                    if stream is not None:
-                        stream.stop_stream()
-                        stream.close()
-                except Exception:
-                    pass
-                try:
-                    p.terminate()
-                except Exception:
-                    pass
+                    audio = AudioSegment.from_file(buf, format="mp3")
+                    p = pyaudio.PyAudio()
+                    format_ = p.get_format_from_width(audio.sample_width)
+                    channels = audio.channels
+                    rate = audio.frame_rate
+
+                    stream = p.open(format=format_, channels=channels, rate=rate, output=True)
+                    raw = audio.raw_data
+                    chunk_size = 2048
+                    pos = 0
+                    while pos < len(raw):
+                        if self._stop_event.is_set():
+                            break
+                        end = min(len(raw), pos + chunk_size)
+                        stream.write(raw[pos:end])
+                        pos = end
+                        time.sleep(0.001)
+                except FileNotFoundError as e:
+                    print(f"[HUD CONSOLE] ❌ EdgeTTS Audio Error (ffmpeg missing?): {e}\nTry installing ffmpeg and adding it to PATH.")
+                except Exception as e:
+                    print(f"[HUD CONSOLE] ❌ EdgeTTS Playback Error: {e}")
+                finally:
+                    try:
+                        if stream is not None:
+                            stream.stop_stream()
+                            stream.close()
+                    except Exception:
+                        pass
+                    try:
+                        if p is not None:
+                            p.terminate()
+                    except Exception:
+                        pass
+                    self._speaking.clear()
+
+            threading.Thread(target=_play_audio, daemon=True).start()
 
         except Exception as e:
             # Keep printing to console/HUD to help debugging
             print(f"[HUD CONSOLE] ❌ EdgeTTS error: {e}")
-        finally:
             self._speaking.clear()
+        finally:
             self._stop_event.clear()
 
     def speak(self, text, on_word=None, on_sentence=None):
@@ -161,54 +172,66 @@ class EdgeTTS(BaseTTS):
 # -------------------------
 class Pyttsx3TTS(BaseTTS):
     def __init__(self, voice=None, rate=180):
+        self.voice = voice
+        self.rate = rate
+        self._speaking = threading.Event()
+        self._stop_event = threading.Event()
+        self.engine = None
+        
+        self._queue = queue.Queue()
+        self._worker_thread = threading.Thread(target=self._tts_worker, daemon=True)
+        self._worker_thread.start()
+
+    def _tts_worker(self):
+        # Initialize COM for this thread specifically (crucial on Windows)
+        try:
+            import comtypes
+            comtypes.CoInitialize()
+        except Exception:
+            pass
+            
         try:
             self.engine = pyttsx3.init()
+            if self.voice:
+                self.engine.setProperty("voice", self.voice)
+            self.engine.setProperty("rate", self.rate)
         except Exception as e:
             print(f"[HUD CONSOLE] ❌ pyttsx3 init failed: {e}")
             self.engine = None
-        self._speaking = threading.Event()
-        self._stop_event = threading.Event()
-        self.voice = voice
-        self.rate = rate
-        if self.engine and voice:
-            try:
-                self.engine.setProperty("voice", voice)
-            except Exception:
-                pass
-        if self.engine:
-            try:
-                self.engine.setProperty("rate", rate)
-            except Exception:
-                pass
+
+        while True:
+            text = self._queue.get()
+            if text is None:
+                break
+                
+            self._stop_event.clear()
+            self._speaking.set()
+            
+            if self.engine:
+                try:
+                    self.engine.say(text)
+                    self.engine.runAndWait()
+                except Exception as e:
+                    print(f"[HUD CONSOLE] ❌ pyttsx3 error: {e}")
+                    
+            self._speaking.clear()
+            self._queue.task_done()
 
     def speak(self, text, on_word=None, on_sentence=None):
-        if self.engine is None:
+        if not text or not text.strip():
             return
-
-        def _run():
-            try:
-                self._stop_event.clear()
-                self._speaking.set()
-                # Note: pyttsx3 supports events but callbacks are platform/driver-dependent.
-                self.engine.say(text)
-                self.engine.runAndWait()
-            except Exception as e:
-                print(f"[HUD CONSOLE] ❌ pyttsx3 error: {e}")
-            finally:
-                self._speaking.clear()
-                self._stop_event.clear()
-
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
+        self._queue.put(text)
 
     def stop(self):
         try:
             self._stop_event.set()
-            if self.engine:
+            if hasattr(self, 'engine') and self.engine:
                 self.engine.stop()
         except Exception:
             pass
         try:
+            with self._queue.mutex:
+                self._queue.queue.clear()
             self._speaking.clear()
         except Exception:
             pass
@@ -218,7 +241,7 @@ class Pyttsx3TTS(BaseTTS):
 
     def set_voice(self, voice):
         self.voice = voice
-        if self.engine and voice:
+        if hasattr(self, 'engine') and self.engine:
             try:
                 self.engine.setProperty("voice", voice)
             except Exception:
@@ -226,7 +249,7 @@ class Pyttsx3TTS(BaseTTS):
 
     def set_rate(self, rate):
         self.rate = rate
-        if self.engine:
+        if hasattr(self, 'engine') and self.engine:
             try:
                 self.engine.setProperty("rate", rate)
             except Exception:

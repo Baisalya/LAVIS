@@ -50,10 +50,13 @@ class VoskSTT(STTBase):
         print(f"[VoskSTT] Mode={mode} → trying model path: {model_path}")
 
         if not os.path.isdir(model_path):
+            # Create the recommended folder automatically if it doesn't exist
+            os.makedirs(model_path, exist_ok=True)
             parent = os.path.dirname(model_path)
             print(f"[VoskSTT] ❌ Model path not found: {model_path}")
+            print(f"[VoskSTT] 📁 Created folder at {model_path}. Please download the Vosk model and extract its contents here.")
             print(f"[VoskSTT] Parent exists: {os.path.isdir(parent)} → {parent}")
-            raise FileNotFoundError(f"❌ Model path not found: {model_path}")
+            raise FileNotFoundError(f"❌ Model path not found. Please place the model files in: {model_path}")
 
         # Load model
         self.model = Model(model_path)

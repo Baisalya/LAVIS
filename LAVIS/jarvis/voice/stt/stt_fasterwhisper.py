@@ -6,8 +6,8 @@ from .stt_base import STTBase
 import time
 
 class FasterWhisperSTT(STTBase):
-    def __init__(self, model_name: str = "small", sample_rate: int = 16000,
-                 device: str = "cpu", compute_type: str = "int8"):
+    def __init__(self, model_name: str = "medium.en", sample_rate: int = 16000,
+                 device: str = "cuda", compute_type: str = "float16"):
         self.model = WhisperModel(model_name, device=device, compute_type=compute_type)
         self.sample_rate = sample_rate
 

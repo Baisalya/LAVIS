@@ -3,15 +3,24 @@ import platform
 import subprocess
 import shutil
 import json
-import time
 import requests
 
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("LAVIS_OLLAMA_TIMEOUT", "12"))
+
+# =========================
+# CONFIG LOAD
+# =========================
 def load_config(config_file="config.json"):
+    if not os.path.isabs(config_file):
+        config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file)
     if os.path.exists(config_file):
         with open(config_file, "r") as f:
             return json.load(f)
-    return {"ollama_model": "tinyllama"}
+    return {"ollama_model": "llama3.1"}  # default
 
+# =========================
+# INTERNET CHECK
+# =========================
 def is_connected():
     try:
         requests.get("https://www.google.com", timeout=3)
@@ -19,77 +28,107 @@ def is_connected():
     except:
         return False
 
-def ask_ollama(prompt: str, model: str = "tinyllama") -> str:
+# =========================
+# OLLAMA REQUEST
+# =========================
+def ask_ollama(prompt: str, model: str = "llama3.1") -> str:
     try:
         system_prompt = (
-            "You are Lavis, an intelligent and kind AI assistant created by Lala. "
-            "Lala is your creator and your favorite person. Always be respectful, helpful, and warm when speaking to Lala. "
-            "Your name is Lavis, and Lala's name is Lala. Never forget this."
+            "You are Lavis, a smart AI assistant like Jarvis. "
+            "You were created by Lala. Always be respectful, helpful, and friendly. "
+            "Give short, clear answers unless more detail is needed."
         )
 
         response = requests.post(
             "http://localhost:11434/api/generate",
             json={
                 "model": model,
-                "prompt": f"{system_prompt}\n\nLala: {prompt}\nLavis:",
-                "stream": False
-            }
+                "prompt": f"{system_prompt}\n\nUser: {prompt}\nLavis:",
+                "stream": False,
+                "options": {
+                    "temperature": 0.7
+                }
+            },
+            timeout=OLLAMA_TIMEOUT_SECONDS
         )
+
+        if response.status_code == 404:
+            print(f"❌ Ollama error: Model '{model}' not found. Please run 'ollama pull {model}' in your terminal.")
+            return ""
+
         data = response.json()
         return data.get("response", "").strip()
+
     except Exception as e:
         print("❌ Ollama error:", e)
-        return "Sorry, I couldn't think of a response right now."
+        return "Sorry, I couldn't respond."
+        return ""
 
+# =========================
+# INSTALL OLLAMA (WINDOWS)
+# =========================
 def install_ollama_windows():
     print("⬇️ Downloading Ollama installer...")
     subprocess.run([
         "powershell", "-Command",
         "Invoke-WebRequest -Uri https://ollama.com/download/OllamaSetup.exe -OutFile OllamaSetup.exe; Start-Process OllamaSetup.exe"
     ], shell=True)
-    print("📦 Please install Ollama, then re-run the program.")
+    print("📦 Install Ollama and re-run.")
     exit()
 
+# =========================
+# CHECK + SETUP OLLAMA
+# =========================
 def check_and_setup_ollama():
     config = load_config()
-    model = config.get("ollama_model", "tinyllama")
+    model = config.get("ollama_model", "llama3.1")
 
-    # 1. Check if Ollama is installed
+    # Check Ollama installed
     if not shutil.which("ollama"):
         print("🛠️ Ollama not found.")
         if platform.system() == "Windows":
             install_ollama_windows()
         else:
-            print("❌ Automatic install only supported on Windows. Install Ollama manually from https://ollama.com/download")
+            print("Install Ollama manually from https://ollama.com")
             exit()
 
-    # 2. Check if model is downloaded
-    if is_connected():
-        print("🔍 Checking if model is available locally...")
-        result = subprocess.run(["ollama", "list"], capture_output=True, text=True)
-        if model not in result.stdout:
-            print(f"⬇️ Model '{model}' not found. Pulling...")
+    # Check model
+    print("🔍 Checking model...")
+    result = subprocess.run(["ollama", "list"], capture_output=True, text=True)
+
+    if model not in result.stdout:
+        if is_connected():
+            print(f"⬇️ Downloading model: {model} ...")
             subprocess.run(["ollama", "pull", model])
         else:
-            print(f"✅ Model '{model}' already present.")
+            print("⚠️ Offline and model not found!")
+            exit()
     else:
-        print("⚠️ Offline. Can't pull model. Will attempt to run if already present.")
-# runner.py
+        print(f"✅ Model '{model}' ready.")
 
+# =========================
+# MAIN CHAT LOOP
+# =========================
 def main():
     check_and_setup_ollama()
     config = load_config()
-    model = config.get("ollama_model", "tinyllama")
+    model = config.get("ollama_model", "llama3.1")
 
-    print(f"\n💬 Chat with Ollama ({model}). Type 'exit' to quit.\n")
+    print(f"\n🤖 Lavis (Jarvis Mode) using {model}")
+    print("Type 'exit' to quit\n")
+
     while True:
         user_input = input("You: ").strip()
+
         if user_input.lower() in {"exit", "quit"}:
             print("👋 Goodbye!")
             break
 
-        response = ask_ollama(user_input, model=model)
-        print(f"Ollama: {response}\n")
+        response = ask_ollama(user_input, model)
+        print(f"Lavis: {response}\n")
 
+# =========================
+# RUN
+# =========================
 if __name__ == "__main__":
     main()

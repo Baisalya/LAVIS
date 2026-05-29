@@ -3,8 +3,6 @@ import socket
 import threading
 import time
 
-from LAVIS.jarvis.voice.recognizer import resume_listening
-
 try:
     from jarvis_hud.main import append_hud_console
 except ImportError:
@@ -31,7 +29,11 @@ def check_and_handle_network_change():
     if current != _last_connected:
         if current:
             append_hud_console("🌐 Reconnected — resuming full features.")
-            resume_listening()
+            try:
+                from LAVIS.jarvis.voice.recognizer import resume_listening
+                resume_listening()
+            except Exception as e:
+                append_hud_console(f"Network watcher could not resume listening: {e}")
         else:
             append_hud_console("📴 Offline — fallback to offline mode.")
     _last_connected = current

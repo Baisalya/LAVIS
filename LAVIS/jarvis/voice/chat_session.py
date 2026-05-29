@@ -1,10 +1,10 @@
 import time
-from jarvis.voice.speaker import speak
-from jarvis.voice.recognizer import set_session_mode, resume_listening, command_queue
+from LAVIS.jarvis.voice.speaker import speak
+from LAVIS.jarvis.voice.recognizer import set_session_mode, resume_listening, command_queue
 
 def chatting_listening(timeout=30):
-    from jarvis.commands.commands import handle_command  # ✅ local import to avoid circular
-    from jarvis.web.fallback import handle_fallback      # ✅ local import to avoid circular
+    from LAVIS.jarvis.commands.commands import handle_command
+    from LAVIS.jarvis.web.fallback import handle_fallback
 
     print("\n🟣 Entering Chat Session")
     set_session_mode(True)  # ✅ Just use session lock (not pause)

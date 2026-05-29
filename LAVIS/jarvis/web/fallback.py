@@ -22,7 +22,7 @@ _recent_texts = []
 # ---------------- Ignore/Noise Config ----------------
 _IGNORE_CFG = {
     "ignore_min_words": 3,
-    "ignore_min_chars": 10,
+    "ignore_min_chars": 2,
     "ignore_max_stopword_ratio": 0.65,
     "ignore_min_avg_word_len": 2.5,
     "ignore_partial_token_min_len": 2,
@@ -32,7 +32,7 @@ _IGNORE_CFG = {
     "debounce_ms": 650,
     "duplicate_window_s": 2.0,
     "repeat_to_accept": 3,
-    "single_word_allowed_keywords": ["weather","time","date","news","joke","music","song","battery","volume"],
+    "single_word_allowed_keywords": ["weather","time","date","news","joke","music","song","battery","volume","jarvis","stop","yes","no","play","pause"],
 }
 
 _STOPWORDS = {"the","a","an","and","or","but","if","then","so","of","in","on","for","to",

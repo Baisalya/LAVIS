@@ -4,11 +4,13 @@ import torchaudio
 import traceback
 import numpy as np
 from speechbrain.inference import SpeakerRecognition
+from speechbrain.utils.fetching import LocalStrategy
 
 # === Load speaker model once ===
 auth_model = SpeakerRecognition.from_hparams(
     source="speechbrain/spkrec-ecapa-voxceleb",
-    savedir="tmp_spkrec"
+    savedir="tmp_spkrec",
+    local_strategy=LocalStrategy.COPY
 )
 
 # === Path settings ===

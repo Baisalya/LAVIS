@@ -16,13 +16,28 @@ import time
 import random
 import traceback
 import io
+import pyttsx3
 import queue
 import inspect
+import shutil
 from typing import List, Tuple, Optional, Dict
 
 import edge_tts
-import pyttsx3
+import torch
+import numpy as np
 from pydub import AudioSegment
+import os
+_ffmpeg_dir = r"C:\ffmpeg\bin"
+if os.path.isdir(_ffmpeg_dir) and _ffmpeg_dir not in os.environ.get("PATH", ""):
+    os.environ["PATH"] += os.pathsep + _ffmpeg_dir
+_ffmpeg_exe = shutil.which("ffmpeg") or os.path.join(_ffmpeg_dir, "ffmpeg.exe")
+_ffprobe_exe = shutil.which("ffprobe") or os.path.join(_ffmpeg_dir, "ffprobe.exe")
+_ffmpeg_available = os.path.exists(_ffmpeg_exe)
+if os.path.exists(_ffmpeg_exe):
+    AudioSegment.converter = _ffmpeg_exe
+if os.path.exists(_ffprobe_exe):
+    AudioSegment.ffprobe = _ffprobe_exe
+
 import pyaudio
 
 # ---- Integration points into the rest of the stack ---------------------------------------------
@@ -66,19 +81,19 @@ def _trace_resume_caller(tag: str):
 VOICE_PROFILES: Dict[str, Dict] = {
     "aria_female": {
         "edge": "en-US-AriaNeural",
-        "pyttsx3_index": 1,
+        "silero_speaker": "en_0",
         "rate": 190,
         "volume": 1.0
     },
     "guy_male": {
         "edge": "en-US-GuyNeural",
-        "pyttsx3_index": 2,
+        "silero_speaker": "en_14",
         "rate": 185,
         "volume": 1.0
     },
     "neutral": {
         "edge": "en-US-JennyNeural",
-        "pyttsx3_index": 0,
+        "silero_speaker": "en_21",
         "rate": 188,
         "volume": 1.0
     }
@@ -105,21 +120,14 @@ def _resolve_edge_voice(profile_name: Optional[str]) -> str:
         return VOICE_PROFILES[profile_name]["edge"]
     return VOICE_PROFILES.get(_current_voice_profile, VOICE_PROFILES["aria_female"])["edge"]
 
-def _configure_pyttsx3_voice(engine: pyttsx3.Engine, profile_name: Optional[str]):
+
+def _can_use_online_tts() -> bool:
+    if not _ffmpeg_available:
+        return False
     try:
-        profile = VOICE_PROFILES.get(profile_name or _current_voice_profile)
-        if not profile:
-            return
-        voices = engine.getProperty('voices')
-        idx = profile.get('pyttsx3_index')
-        if isinstance(idx, int) and idx < len(voices):
-            engine.setProperty('voice', voices[idx].id)
-        if 'rate' in profile:
-            engine.setProperty('rate', profile.get('rate', 190))
-        if 'volume' in profile:
-            engine.setProperty('volume', profile.get('volume', 1.0))
-    except Exception as e:
-        append_hud_console(f"[TTS] pyttsx3 voice config failed: {e}")
+        return is_connected()
+    except Exception:
+        return False
 
 VOICE_NAME = _resolve_edge_voice(None)
 OFFLINE_RATE = 190
@@ -130,7 +138,6 @@ OFFLINE_PHRASE_WORDS = 30
 PY_AUDIO_CHUNK = 2048
 FILLER_MAX_WAIT = 5.0
 
-_engine: Optional[pyttsx3.Engine] = None
 stop_speaking = False
 speaking = False
 _tts_thread: Optional[threading.Thread] = None
@@ -140,6 +147,7 @@ _offline_queue: "queue.Queue[Tuple[int, str]]" = queue.Queue()
 _offline_thread: Optional[threading.Thread] = None
 _engine_ready = threading.Event()
 
+_engine = None
 _resume_text: Optional[str] = None
 _resume_word_index: int = 0
 _current_words: List[str] = []
@@ -176,6 +184,22 @@ def _init_pyttsx3():
         append_hud_console(f"[TTS] pyttsx3 init failed: {e}")
         _engine = None
         return None
+
+def _configure_pyttsx3_voice(engine, profile_name: Optional[str]):
+    try:
+        profile = VOICE_PROFILES.get(profile_name or _current_voice_profile)
+        if not profile:
+            return
+        voices = engine.getProperty('voices')
+        idx = profile.get('pyttsx3_index', 0)
+        if isinstance(idx, int) and idx < len(voices):
+            engine.setProperty('voice', voices[idx].id)
+        if 'rate' in profile:
+            engine.setProperty('rate', profile.get('rate', 190))
+        if 'volume' in profile:
+            engine.setProperty('volume', profile.get('volume', 1.0))
+    except Exception as e:
+        append_hud_console(f"[TTS] pyttsx3 voice config failed: {e}")
 
 # --- Offline worker: expects (token, phrase, profile_name) ---
 def _offline_worker():
@@ -277,11 +301,13 @@ def stop_speech():
     try:
         with _offline_queue.mutex:
             _offline_queue.queue.clear()
-        eng = _init_pyttsx3()
-        if eng is not None:
-            eng.stop()
     except Exception as e:
         append_hud_console(f"[TTS] stop failed: {e}")
+    try:
+        if _engine is not None:
+            _engine.stop()
+    except Exception:
+        pass
     _mark_speaking(False)
     try:
         if not ALLOW_BARGE_IN:
@@ -308,14 +334,6 @@ def pause_speech():
         _playback_token += 1
         append_hud_console(f"[TTS] playback token bumped (no lock available) -> {_playback_token}")
 
-    # Stop pyttsx3 engine if active
-    try:
-        eng = _init_pyttsx3()
-        if eng is not None:
-            eng.stop()
-    except Exception as e:
-        append_hud_console(f"[TTS] pause engine.stop() failed: {e}")
-
     # If a TTS thread exists, give it a short grace period to terminate so audio device is released.
     try:
         if _tts_thread is not None and isinstance(_tts_thread, threading.Thread):
@@ -336,75 +354,48 @@ def pause_speech():
 def resume_if_ignored_interruption() -> bool:
     return _resume_word_if_any()
 
+def _play_pcm_bytes(pcm_data: bytes, token: int, sample_rate: int = 16000):
+    if token != _playback_token or not pcm_data:
+        return
+    p = pyaudio.PyAudio()
+    stream = p.open(format=pyaudio.paInt16, channels=1, rate=sample_rate, output=True)
+
+    for i in range(0, len(pcm_data), PY_AUDIO_CHUNK):
+        if stop_speaking or token != _playback_token:
+            break
+        tts_playback_ping()
+        stream.write(pcm_data[i:i+PY_AUDIO_CHUNK])
+
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+
 # --- Playback helpers that check token and accept a profile_name ---------------------------------
-def _play_audio_segment(audio_segment: AudioSegment, token: int):
-    """
-    Play a pydub AudioSegment but guard with token/stop flags, log start/end and errors,
-    and skip / return early if audio is empty.
-    """
-    if token != _playback_token:
-        append_hud_console("[TTS] _play_audio_segment: token mismatch, aborting segment.")
+def _play_audio_bytes(audio_bytes: bytes, token: int):
+    if token != _playback_token or not audio_bytes:
         return
-
-    if audio_segment is None:
-        append_hud_console("[TTS] _play_audio_segment: audio_segment is None, aborting.")
-        return
-
+    import subprocess
     try:
-        raw = audio_segment.raw_data
-        if not raw or len(raw) == 0 or audio_segment.duration_seconds == 0:
-            append_hud_console(f"[TTS] _play_audio_segment: empty audio (duration {audio_segment.duration_seconds}), abort.")
-            return
-    except Exception:
-        # if audio doesn't have expected attributes — still try but warn
-        append_hud_console("[TTS] _play_audio_segment: audio sanity check failed (continuing)")
+        ffmpeg_cmd = getattr(AudioSegment, 'converter', 'ffmpeg')
+        process = subprocess.Popen(
+            [ffmpeg_cmd, "-i", "pipe:0", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", "pipe:1"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL
+        )
+        pcm_data, _ = process.communicate(audio_bytes)
+        _play_pcm_bytes(pcm_data, token, 16000)
+    except FileNotFoundError as e:
+        append_hud_console("⚠️ FFmpeg is missing! Please install FFmpeg (and add to PATH) for Edge TTS.")
+        raise RuntimeError("FFmpeg missing") from e
 
-    sr = audio_segment.frame_rate
-    ch = audio_segment.channels
-    sw = audio_segment.sample_width
-
-    append_hud_console(f"[TTS] playing audio segment (len={len(raw)} bytes, dur={audio_segment.duration_seconds:.3f}s)")
-
-    p = None
-    stream = None
-    try:
-        p = pyaudio.PyAudio()
-        stream = p.open(format=p.get_format_from_width(sw), channels=ch, rate=sr, output=True)
-        for i in range(0, len(raw), PY_AUDIO_CHUNK):
-            if stop_speaking or token != _playback_token:
-                append_hud_console("[TTS] playback interrupted (stop or token changed) while writing chunk.")
-                break
-            tts_playback_ping()
-            try:
-                stream.write(raw[i:i+PY_AUDIO_CHUNK])
-            except Exception as e:
-                append_hud_console(f"[TTS] Error writing audio chunk: {e}")
-                break
-    except Exception as e:
-        append_hud_console(f"[TTS] audio playback open/write failed: {e}")
-    finally:
-        try:
-            if stream is not None:
-                stream.stop_stream()
-                stream.close()
-        except Exception:
-            pass
-        try:
-            if p is not None:
-                p.terminate()
-        except Exception:
-            pass
-
-    append_hud_console("[TTS] finished audio segment")
-
-async def _edge_tts_fetch_audio(text: str, voice_name: str) -> AudioSegment:
-    buf = io.BytesIO()
+async def _edge_tts_fetch_audio(text: str, voice_name: str):
     communicate = edge_tts.Communicate(text, voice_name)
+    audio_bytes = b""
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
-            buf.write(chunk["data"])
-    buf.seek(0)
-    return AudioSegment.from_file(buf, format="mp3")
+            audio_bytes += chunk["data"]
+    return audio_bytes
 
 # adaptive chunk size
 def _adaptive_chunk_size(words: List[str], index: int, default: int) -> int:
@@ -425,7 +416,7 @@ def _play_online_phrases(
     token: int = 0,
     profile_name: Optional[str] = None
 ) -> int:
-    global stop_speaking, _last_played_word_index
+    global stop_speaking, _last_played_word_index, _resume_word_index
     i = start_index
     voice_name = _resolve_edge_voice(profile_name)
 
@@ -454,16 +445,18 @@ def _play_online_phrases(
                 _last_played_word_index = i
                 return i
 
-            _play_audio_segment(audio, token)
+            _play_audio_bytes(audio, token)
 
             if token == _playback_token and not stop_speaking:
                 time.sleep(random.uniform(0.05, 0.4))
                 if phrase.rstrip().endswith(('.', '!', '?')):
                     time.sleep(random.uniform(0.4, 0.8))
 
-        except Exception:
-            traceback.print_exc()
-            return i
+        except Exception as e:
+            append_hud_console(f"⚠️ Online TTS error: {e}. Falling back to offline TTS.")
+            _resume_word_index = i
+            _speak_offline_word_aware(" ".join(words), token, profile_name)
+            return len(words)
 
         i += adaptive
         _last_played_word_index = i
@@ -485,7 +478,9 @@ def _speak_online_word_aware(text: str, token: int, profile_name: Optional[str] 
 # Offline: queue (token, phrase, profile_name)
 def _play_offline_phrases(words: List[str], start_index: int = 0, phrase_size: int = OFFLINE_PHRASE_WORDS, token: int = 0, profile_name: Optional[str] = None) -> int:
     global stop_speaking, _last_played_word_index
-    _ensure_offline_worker()
+    eng = _init_pyttsx3()
+    if eng is None:
+        return len(words)
     i = start_index
     while i < len(words):
         if stop_speaking or token != _playback_token:
@@ -499,8 +494,15 @@ def _play_offline_phrases(words: List[str], start_index: int = 0, phrase_size: i
                 pass
         size = _adaptive_chunk_size(words, i, phrase_size)
         phrase = " ".join(words[i:i+size])
-        _offline_queue.put((token, phrase, profile_name))
-        time.sleep(random.uniform(0.02, 0.06))
+        try:
+            _configure_pyttsx3_voice(eng, profile_name)
+            tts_playback_ping()
+            eng.say(phrase + " ")
+            eng.runAndWait()
+        except Exception:
+            traceback.print_exc()
+            return i
+        time.sleep(random.uniform(0.02, 0.08))
         i += size
         _last_played_word_index = i
     return len(words)
@@ -548,7 +550,7 @@ def _resume_word_if_any() -> bool:
         stored_profile = _current_voice_profile
 
         try:
-            if is_connected():
+            if _can_use_online_tts():
                 result = _speak_online_word_aware(_resume_text, token, profile_name=stored_profile)
             else:
                 result = _speak_offline_word_aware(_resume_text, token, profile_name=stored_profile)
@@ -595,9 +597,6 @@ def speak(text: str, voice: Optional[str] = None):
             try:
                 with _offline_queue.mutex:
                     _offline_queue.queue.clear()
-                eng = _init_pyttsx3()
-                if eng is not None:
-                    eng.stop()
             except Exception:
                 pass
             _tts_thread.join(timeout=0.25)
@@ -616,7 +615,7 @@ def speak(text: str, voice: Optional[str] = None):
 
         def run_tts(my_token=token, profile_name=voice or _current_voice_profile):
             try:
-                if is_connected():
+                if _can_use_online_tts():
                     append_hud_console(f"🗣️ (online) {text}")
                     _speak_online_word_aware(text, my_token, profile_name=profile_name)
                 else:
@@ -654,9 +653,6 @@ def human_speak(answer: str, voice: Optional[str] = None):
             try:
                 with _offline_queue.mutex:
                     _offline_queue.queue.clear()
-                eng = _init_pyttsx3()
-                if eng is not None:
-                    eng.stop()
             except Exception:
                 pass
             time.sleep(0.02)

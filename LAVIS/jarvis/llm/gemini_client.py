@@ -5,6 +5,7 @@ GEMINI_API_KEY = "AIzaSyCf29NxuCUdPvdwSdxyoHTjW-G10e6EiGo"
 
 # ⚡ Choose model
 GEMINI_MODEL = "gemini-1.5-flash-latest"  # Or "models/gemini-1.5-pro-latest"
+GEMINI_MODEL = "gemini-1.5-flash"  # Or "gemini-1.5-pro"
 
 def ask_gemini(prompt: str) -> str:
     """

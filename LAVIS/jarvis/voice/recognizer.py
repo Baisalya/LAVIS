@@ -12,11 +12,8 @@ import pyaudio
 from kivy.clock import Clock
 from fuzzywuzzy import fuzz
 
-from jarvis_hud.components.hud_controller import HUDController
 from LAVIS.utils.hud_utils import get_hud_controller
-from LAVIS.jarvis.voice.auth.voice_auth import is_tts_voice
 from LAVIS.jarvis.voice.controllers.watchdog import VoiceWatchdog
-from LAVIS.jarvis.voice.controllers.VadSilero import VadSilero
 from LAVIS.jarvis.voice.controllers.AdaptiveAEC import MicEchoCancellingTrack, PyAudioStreamTrack
 
 
@@ -27,18 +24,35 @@ except ImportError:
 
 # Import STT plugin
 from LAVIS.jarvis.voice.stt.stt_vosk import VoskSTT   # <<-- Swap this out in future
-from LAVIS.jarvis.voice.stt.stt_google import GoogleSTT
-from LAVIS.jarvis.voice.stt.stt_fasterwhisper import FasterWhisperSTT
 
 
 # ===== Settings =====
 AUTHENTICATION_ENABLED = False
+TTS_VOICE_MATCH_ENABLED = False
 
 # === New debounce globals ===
 _last_auto_resume_ms = 0
 _AUTO_RESUME_DEBOUNCE_MS = 500
-# Initialize once
-vad = VadSilero(sample_rate=16000)
+vad = None
+
+
+def _get_vad(sample_rate=16000):
+    global vad
+    if vad is None:
+        from LAVIS.jarvis.voice.controllers.VadSilero import VadSilero
+        vad = VadSilero(sample_rate=sample_rate)
+    return vad
+
+
+def _is_tts_voice_frame(data: bytes) -> bool:
+    if not TTS_VOICE_MATCH_ENABLED:
+        return False
+    try:
+        from LAVIS.jarvis.voice.auth.voice_auth import is_tts_voice
+        return is_tts_voice(data)
+    except Exception as e:
+        append_hud_console(f"[TTS voice match disabled] {e}")
+        return False
 # ===== Auto-resume helpers =====
 def _safe_resume_call(resume_func=None):
     global _last_auto_resume_ms
@@ -72,7 +86,7 @@ def schedule_auto_resume(delay: float = 1.5):
     threading.Thread(target=_check_and_resume, daemon=True).start()
 
 def handle_auto_resume(barge_paused, now, last_speech_time, AUTO_RESUME_SILENCE):
-    from LAVIS.jarvis import speaker as speaker_mod
+    from LAVIS.jarvis.voice import speaker as speaker_mod
     if barge_paused and not speaker_mod.speaking:
         if now - last_speech_time > AUTO_RESUME_SILENCE:
             append_hud_console("⏯️ Auto-resuming previous speech after brief silence...")
@@ -244,11 +258,12 @@ def _vosk_listen_loop():
         aec_track = MicEchoCancellingTrack(mic_track)
 
         # === Init VAD lazily (only once) ===
-        try:
-            vad  # if already exists at module level
-        except NameError:
-            from LAVIS.jarvis.voice.controllers.VadSilero import VadSilero
-            vad = VadSilero(sample_rate=SAMPLE_RATE)
+        active_vad = None
+        if os.getenv("LAVIS_USE_SILERO_VAD", "").strip().lower() in {"1", "true", "yes", "on"}:
+            try:
+                active_vad = _get_vad(SAMPLE_RATE)
+            except Exception as e:
+                append_hud_console(f"VAD model unavailable; using RMS fallback: {e}")
 
         # === Create recognizers once ===
         from LAVIS.jarvis.network import is_connected
@@ -307,13 +322,12 @@ def _vosk_listen_loop():
 
             # --- Mask TTS ---
             try:
-                tts_like = is_tts_voice(data)
+                tts_like = _is_tts_voice_frame(data)
             except Exception:
                 tts_like = False
 
-            last_tts_ping_ms = getattr(speaker_mod, "_last_tts_ping_ms", 0)
             try:
-                tts_recent = (now_ms - int(last_tts_ping_ms)) < TTS_MASK_DEBOUNCE_MS
+                tts_recent = (now_ms - int(_last_tts_ping_ms)) < TTS_MASK_DEBOUNCE_MS
             except Exception:
                 tts_recent = False
 
@@ -323,31 +337,64 @@ def _vosk_listen_loop():
 
             # --- VAD check ---
             try:
-                speech_here = vad.is_speech(data)
+                speech_here = active_vad.is_speech(data) if active_vad else (rms_level >= BARGE_IN_RMS_THRESHOLD)
             except Exception:
                 speech_here = (rms_level >= BARGE_IN_RMS_THRESHOLD)
 
-            # --- Feed recognizer ---
-            if speech_here:
-                recognizer.accept_waveform(data)
+            if getattr(speaker_mod, "speaking", False) and speech_here and rms_level >= BARGE_IN_RMS_THRESHOLD:
+                _rms_sustain_count += 1
+            else:
+                _rms_sustain_count = 0
 
-            if recognizer.accept_waveform(data):
+            if (
+                getattr(speaker_mod, "speaking", False)
+                and not barge_paused
+                and pause_speech
+                and _rms_sustain_count >= BARGE_IN_RMS_SUSTAIN
+            ):
+                pause_speech()
+                barge_paused = True
+                barge_pause_start = now
+                append_hud_console("⏸️ Barge-in detected; listening for your interrupt.")
+
+            # Feed each audio frame to STT once. Vosk needs both speech and trailing
+            # silence frames to decide when a complete utterance has ended.
+            accepted = recognizer.accept_waveform(data)
+
+            if accepted:
                 try:
                     query, category = recognizer.get_result()
                     if query:
                         if fuzz.ratio(query, last_spoken_text) > 85 or fuzz.ratio(query, current_spoken_sentence) > 85:
+                            if barge_paused:
+                                schedule_auto_resume()
+                                barge_paused = False
                             continue
-                        if query in _STOP_WORDS:
+
+                        interruption = classify_interruption(query)
+                        if interruption == "stop":
                             append_hud_console("🛑 Voice stop detected.")
                             stop_speech()
                             clear_resume()
                             set_last_spoken_text("")
+                            recognizer.reset()
+                            barge_paused = False
                             continue
+                        if interruption == "ignore":
+                            if barge_paused:
+                                schedule_auto_resume()
+                                barge_paused = False
+                            recognizer.reset()
+                            continue
+
+                        if barge_paused or getattr(speaker_mod, "speaking", False):
+                            stop_speech()
+                            clear_resume()
+                            barge_paused = False
 
                         if controller:
                             Clock.schedule_once(lambda dt: controller.update(query, category=category, typing=True))
                         command_queue.put_nowait(query)
-                        set_last_spoken_text(query)
                         recognizer.reset()
                         last_speech_time = now
                         continue
@@ -362,11 +409,28 @@ def _vosk_listen_loop():
                     append_hud_console(f"🔎 Partial: {partial}")
                     _update_hud_text(f"🗣️ {partial}")
                     last_speech_time = now
+                    alpha_count = sum(c.isalpha() for c in partial)
+                    if (
+                        getattr(speaker_mod, "speaking", False)
+                        and not barge_paused
+                        and pause_speech
+                        and len(partial) >= BARGE_IN_MIN_PARTIAL_CHARS
+                        and alpha_count >= BARGE_IN_MIN_PARTIAL_ALPHA
+                        and fuzz.ratio(partial, current_spoken_sentence) < 75
+                        and fuzz.ratio(partial, last_spoken_text) < 75
+                    ):
+                        pause_speech()
+                        barge_paused = True
+                        barge_pause_start = now
+                        append_hud_console("⏸️ Barge-in partial detected.")
             except Exception:
                 pass
 
             # --- Reset on silence ---
             if now - last_speech_time > silence_timeout:
+                if barge_paused and now - barge_pause_start > AUTO_RESUME_SILENCE:
+                    _safe_resume_call()
+                    barge_paused = False
                 _last_partial = ""
                 recognizer.reset()
                 last_speech_time = now

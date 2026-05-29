@@ -1,6 +1,16 @@
 # Lavis.py (Polished)
 
-import os, re, time, logging, threading, datetime
+import os, sys, re, time, logging, threading, datetime
+
+# Mute Kivy's verbose debug logs
+os.environ["KIVY_LOG_LEVEL"] = "warning"
+
+# Add the parent directory to sys.path to allow absolute imports starting with 'LAVIS.'
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Import LLM fallback first to avoid SpeechBrain lazy-import conflict with torch/transformers
+from LAVIS.jarvis.llm.llm_ask import LLMFallback
+
 from fuzzywuzzy import fuzz
 import random
 from playsound import playsound
@@ -23,7 +33,6 @@ from LAVIS.jarvis.commands.input_control import handle_input_control
 from LAVIS.jarvis.apps.userai.lavish_messages import AssistantCrushMessages
 from LAVIS.utils.hud_utils import get_hud_controller
 from LAVIS.jarvis.network import start_network_watcher
-from LAVIS.jarvis.llm.llm_ask import LLMFallback
 
 try:
     from jarvis_hud.main import update_hud_text, update_hud_status, hud_interface
@@ -40,9 +49,14 @@ except ImportError:
     def show_fallback_in_hud(text): print(f"[FALLBACK] {text}")
 
 WAKE_WORD = "Lavish"
+WAKE_WORD_PATTERN = r"\b(lavis|lavish|levies|lobbies|ladies|labs)\b"
 WAKE_UP_PHRASE = "hello Lavish"
 SLEEP_PHRASE = "Lavish sleep"
-AUDIO_STARTUP = os.path.abspath("LAVIS/lavis_start.mp3")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+AUDIO_STARTUP_CANDIDATES = [
+    os.path.join(BASE_DIR, "lavis_start.mp3"),
+    os.path.join(BASE_DIR, "lavis start.mp3"),
+]
 USER_NAME = "Lala"
 
 
@@ -88,13 +102,15 @@ class LavisCore:
 
     def welcome(self):
         try:
-            if os.path.exists(AUDIO_STARTUP):
-                playsound(AUDIO_STARTUP)
+            startup_audio = next((p for p in AUDIO_STARTUP_CANDIDATES if os.path.exists(p)), None)
+            if startup_audio:
+                playsound(startup_audio)
 
-            try:
-                welcome_msg = self.llm.ask(f"Generate a warm,short startup welcome message for {USER_NAME} after startup. Avoid robotic tone.")
-            except Exception:
-                welcome_msg = "Presence confirmed. Let's make things happen when you're ready."
+            welcome_msg = random.choice([
+                f"I'm here, {USER_NAME}. Say hello Lavis when you need me.",
+                f"Lavis is online, {USER_NAME}. I'll stay quiet until you call.",
+                "Presence confirmed. I'm ready when you are.",
+            ])
 
             self.hud_speak(welcome_msg)
 
@@ -103,17 +119,15 @@ class LavisCore:
 
     def generate_greeting(self):
         current_hour = datetime.datetime.now().hour
-        try:
-            return self.llm.ask(f"Generate a friendly, natural-sounding greeting for {USER_NAME} based on the current time ({current_hour} hours). Avoid being repetitive or overly formal.")
-        except Exception:
-            if 5 <= current_hour < 12:
-                return f"Good morning, {USER_NAME}"
-            elif 12 <= current_hour < 17:
-                return f"Good afternoon, {USER_NAME}"
-            elif 17 <= current_hour < 21:
-                return f"Good evening, {USER_NAME}"
-            else:
-                return self.crush.random_late_night_greeting()
+        if 5 <= current_hour < 12:
+            choices = [f"Good morning, {USER_NAME}. I'm listening.", f"Morning, {USER_NAME}. What are we doing first?"]
+        elif 12 <= current_hour < 17:
+            choices = [f"Good afternoon, {USER_NAME}. I'm with you.", f"Afternoon, {USER_NAME}. Tell me what you need."]
+        elif 17 <= current_hour < 21:
+            choices = [f"Good evening, {USER_NAME}. I'm listening.", f"Evening, {USER_NAME}. What's on your mind?"]
+        else:
+            choices = [self.crush.random_late_night_greeting(), f"I'm here, {USER_NAME}. Go ahead."]
+        return random.choice(choices)
 
     def check_wake_phrase(self, text):
         try:
@@ -126,16 +140,13 @@ class LavisCore:
                     greeting = self.generate_greeting()
                     self.hud_speak(greeting)
                 else:
-                    try:
-                        reply = self.llm.ask(f"User greeted you with '{text}'. Respond naturally and concisely.")
-                    except Exception:
-                        reply = random.choice([
-                            "Yes? I'm right here.",
-                            "You called me?",
-                            "Standing by!",
-                            f"How can I help, {USER_NAME}?",
-                            "Reporting for duty!"
-                        ])
+                    reply = random.choice([
+                        "Yes? I'm right here.",
+                        "You called me?",
+                        "Standing by.",
+                        f"How can I help, {USER_NAME}?",
+                        "I'm listening."
+                    ])
                     self.hud_speak(reply)
                 return True
 
@@ -167,13 +178,15 @@ class LavisCore:
                 print("⏳ Delaying command due to wake-up buffer")
                 return
 
-            if len(input_text.strip().split()) < 2 and "?" not in input_text:
-                Clock.schedule_once(lambda dt: show_hud_reply("Please say a full sentence."), 0)
+            if not input_text or not input_text.strip():
                 return
 
-            command = re.sub(rf"\b{WAKE_WORD}\b", "", input_text, flags=re.IGNORECASE).strip() or input_text
+            command = re.sub(WAKE_WORD_PATTERN, "", input_text, flags=re.IGNORECASE).strip() or input_text
             if not skip_echo:  # ✅ avoid double-echo if recognizer already displayed
-                Clock.schedule_once(lambda dt: self.hud_controller.update(command, category="command", typing=True), 0)
+                if self.hud_controller and hasattr(self.hud_controller, "update"):
+                    Clock.schedule_once(lambda dt: self.hud_controller.update(command, category="command", typing=True), 0)
+                else:
+                    Clock.schedule_once(lambda dt: show_hud_command(command), 0)
 
             command_lower = command.lower().strip()
 
@@ -295,7 +308,7 @@ class LavisCore:
 
         except Exception as e:
             logging.exception("⚠️ Runtime error in main loop:")
-            Clock.schedule_once(lambda dt: update_hud_status(str(e), category="error"), 0)
+            Clock.schedule_once(lambda dt: update_hud_text(str(e), category="error"), 0)
             speak("Something went wrong during input processing.")
 
 class LavisRunner:
