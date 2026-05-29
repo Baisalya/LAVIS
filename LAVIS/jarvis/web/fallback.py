@@ -122,6 +122,7 @@ def get_hardcoded_response(text: str) -> Optional[str]:
 def handle_fallback(command: str, confidence: Optional[float]=None, is_partial: bool=False) -> str:
     global last_fallback_response, _last_processed_ts, _recent_texts
     profile = load_user_profile()
+    user_emotion = detect_emotion(command)
     now = time.time()
 
     # Debounce rapid events
@@ -146,7 +147,7 @@ def handle_fallback(command: str, confidence: Optional[float]=None, is_partial: 
     # Quick hardcoded answers
     quick = get_hardcoded_response(command)
     if quick:
-        show_fallback_in_hud(quick); human_speak(quick)
+        show_fallback_in_hud(quick); human_speak(quick, emotion=user_emotion)
         resume_listening(); set_session_mode(False)
         last_fallback_response=quick; _last_processed_ts=now
         return quick
@@ -158,13 +159,13 @@ def handle_fallback(command: str, confidence: Optional[float]=None, is_partial: 
             sys_prompt=build_system_prompt(profile)
             prompt=f"{sys_prompt}\nUser asked: {command}\nKnown fact: {profile_ans}\nRespond naturally as Jarvis."
             reply=llm_fallback.ask(prompt) or profile_ans
-            show_fallback_in_hud(reply); human_speak(reply)
+            show_fallback_in_hud(reply); human_speak(reply, emotion=user_emotion)
             resume_listening(); set_session_mode(False)
             last_fallback_response=reply; _last_processed_ts=now
             return reply
 
     # Intent/emotion logging
-    intent=detect_intent(command); emotion=detect_emotion(command)
+    intent=detect_intent(command); emotion=user_emotion
     print(f"[🧠 Intent] {intent}, [Emotion] {emotion}")
 
     cfg=load_config()
@@ -186,7 +187,7 @@ def handle_fallback(command: str, confidence: Optional[float]=None, is_partial: 
                 if any(b in resp.lower() for b in BAD) or len(resp.split())<3:
                     continue
                 last_fallback_response=resp
-                show_fallback_in_hud(resp); human_speak(resp)
+                show_fallback_in_hud(resp); human_speak(resp, emotion=emotion)
                 if not (auto_converse and is_conversational(command)):
                     resume_listening(); set_session_mode(False)
                 _last_processed_ts=now; return resp

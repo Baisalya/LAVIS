@@ -6,8 +6,8 @@
 # - Public API:
 #     set_voice_profile(name)           -> set default voice profile
 #     list_voice_profiles()             -> list available profiles
-#     speak(text, voice=None)           -> speak using optional per-call voice override
-#     human_speak(answer, voice=None)   -> human filler + final reply with optional voice
+#     speak(text, voice=None, emotion=None)
+#     human_speak(answer, voice=None, emotion=None)
 
 import asyncio
 import threading
@@ -100,6 +100,127 @@ VOICE_PROFILES: Dict[str, Dict] = {
 }
 _current_voice_profile = "aria_female"
 
+EMOTION_TTS_STYLES: Dict[str, Dict] = {
+    "neutral": {
+        "rate": "+0%",
+        "pitch": "+0Hz",
+        "volume": "+0%",
+        "offline_rate_delta": 0,
+        "pause": (0.08, 0.22),
+        "sentence_pause": (0.32, 0.62),
+        "chunk_words": 40,
+        "filler": ["Hmm...", "Got it...", "Let me think...", "One second..."],
+    },
+    "positive": {
+        "rate": "+5%",
+        "pitch": "+8Hz",
+        "volume": "+3%",
+        "offline_rate_delta": 8,
+        "pause": (0.05, 0.16),
+        "sentence_pause": (0.24, 0.48),
+        "chunk_words": 34,
+        "filler": ["Nice...", "Alright...", "I like that...", "Got it..."],
+    },
+    "excited": {
+        "rate": "+11%",
+        "pitch": "+15Hz",
+        "volume": "+6%",
+        "offline_rate_delta": 18,
+        "pause": (0.03, 0.12),
+        "sentence_pause": (0.18, 0.38),
+        "chunk_words": 28,
+        "filler": ["Oh, nice...", "Yes...", "Alright...", "I have it..."],
+    },
+    "curious": {
+        "rate": "+2%",
+        "pitch": "+10Hz",
+        "volume": "+0%",
+        "offline_rate_delta": 3,
+        "pause": (0.10, 0.26),
+        "sentence_pause": (0.34, 0.7),
+        "chunk_words": 30,
+        "filler": ["Hmm...", "Let me see...", "Interesting...", "One thought..."],
+    },
+    "sad": {
+        "rate": "-11%",
+        "pitch": "-8Hz",
+        "volume": "-4%",
+        "offline_rate_delta": -22,
+        "pause": (0.18, 0.36),
+        "sentence_pause": (0.55, 1.0),
+        "chunk_words": 24,
+        "filler": ["Hey...", "I hear you...", "I'm here...", "Okay..."],
+    },
+    "negative": {
+        "rate": "-8%",
+        "pitch": "-5Hz",
+        "volume": "-2%",
+        "offline_rate_delta": -16,
+        "pause": (0.16, 0.32),
+        "sentence_pause": (0.48, 0.9),
+        "chunk_words": 26,
+        "filler": ["I hear you...", "Okay...", "Let me be careful here...", "I'm with you..."],
+    },
+    "anxious": {
+        "rate": "-5%",
+        "pitch": "+2Hz",
+        "volume": "-1%",
+        "offline_rate_delta": -10,
+        "pause": (0.13, 0.28),
+        "sentence_pause": (0.42, 0.78),
+        "chunk_words": 24,
+        "filler": ["Okay...", "Breathe a second...", "I'm here...", "Let's slow it down..."],
+    },
+    "angry": {
+        "rate": "-4%",
+        "pitch": "-2Hz",
+        "volume": "+1%",
+        "offline_rate_delta": -8,
+        "pause": (0.12, 0.26),
+        "sentence_pause": (0.38, 0.72),
+        "chunk_words": 24,
+        "filler": ["Okay...", "I understand...", "Let's handle this cleanly...", "I'm listening..."],
+    },
+    "affectionate": {
+        "rate": "-3%",
+        "pitch": "+6Hz",
+        "volume": "-1%",
+        "offline_rate_delta": -6,
+        "pause": (0.14, 0.3),
+        "sentence_pause": (0.42, 0.82),
+        "chunk_words": 26,
+        "filler": ["Hey...", "Of course...", "I'm here...", "Mm..."],
+    },
+    "serious": {
+        "rate": "-6%",
+        "pitch": "-4Hz",
+        "volume": "+0%",
+        "offline_rate_delta": -12,
+        "pause": (0.12, 0.28),
+        "sentence_pause": (0.42, 0.78),
+        "chunk_words": 26,
+        "filler": ["Understood...", "Carefully...", "One moment...", "Let me check..."],
+    },
+}
+
+_EMOTION_ALIASES = {
+    "happy": "positive",
+    "joy": "positive",
+    "joyful": "positive",
+    "calm": "neutral",
+    "question": "curious",
+    "negative": "negative",
+    "upset": "sad",
+    "sadness": "sad",
+    "worried": "anxious",
+    "worry": "anxious",
+    "love": "affectionate",
+    "caring": "affectionate",
+    "error": "serious",
+    "warning": "serious",
+    "command": "serious",
+}
+
 def list_voice_profiles():
     return list(VOICE_PROFILES.keys())
 
@@ -119,6 +240,87 @@ def _resolve_edge_voice(profile_name: Optional[str]) -> str:
     if profile_name and profile_name in VOICE_PROFILES:
         return VOICE_PROFILES[profile_name]["edge"]
     return VOICE_PROFILES.get(_current_voice_profile, VOICE_PROFILES["aria_female"])["edge"]
+
+
+def _normalize_emotion(emotion: Optional[str]) -> str:
+    if not emotion:
+        return "neutral"
+    key = re.sub(r"[^a-z_]+", "", str(emotion).lower().strip())
+    key = _EMOTION_ALIASES.get(key, key)
+    return key if key in EMOTION_TTS_STYLES else "neutral"
+
+
+def _detect_tts_emotion(text: str) -> str:
+    t = (text or "").lower()
+    if not t.strip():
+        return "neutral"
+
+    angry = ["angry", "furious", "irritated", "annoyed", "hate", "mad", "stop it", "shut up"]
+    anxious = ["worried", "scared", "anxious", "panic", "stressed", "nervous", "afraid", "tense"]
+    sad = ["sad", "lonely", "depressed", "cry", "hurt", "broken", "tired of", "not okay", "miss you"]
+    affectionate = ["dear", "love", "sweet", "proud of you", "i'm here", "i am here", "with you"]
+    excited = ["amazing", "awesome", "excellent", "great news", "let's go", "perfect!", "yes!", "wow"]
+    serious = ["error", "failed", "warning", "careful", "danger", "risk", "blocked", "unavailable", "couldn't"]
+    positive = ["happy", "good", "great", "nice", "thanks", "thank you", "done", "ready", "perfect"]
+
+    if any(w in t for w in angry):
+        return "angry"
+    if any(w in t for w in anxious):
+        return "anxious"
+    if any(w in t for w in sad):
+        return "sad"
+    if any(w in t for w in affectionate):
+        return "affectionate"
+    if any(w in t for w in excited) or t.count("!") >= 2:
+        return "excited"
+    if any(w in t for w in serious):
+        return "serious"
+    if "?" in t:
+        return "curious"
+    if any(w in t for w in positive):
+        return "positive"
+    return "neutral"
+
+
+def _resolve_tts_style(text: str, emotion: Optional[str] = None) -> Tuple[str, Dict]:
+    resolved = _normalize_emotion(emotion) if emotion else _detect_tts_emotion(text)
+    return resolved, EMOTION_TTS_STYLES.get(resolved, EMOTION_TTS_STYLES["neutral"])
+
+
+def _clamp_pyttsx3_rate(rate: int) -> int:
+    return max(120, min(235, int(rate)))
+
+
+def _percent_to_float(value: str, default: float = 0.0) -> float:
+    try:
+        return float(str(value).replace("%", "")) / 100.0
+    except Exception:
+        return default
+
+
+def _humanize_for_tts(text: str, emotion_name: str) -> str:
+    clean = re.sub(r"\s+", " ", (text or "").strip())
+    if not clean:
+        return clean
+
+    clean = re.sub(r"^(okay|ok|alright|right|sure|yes|no)\s+", lambda m: m.group(1).capitalize() + ", ", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\b(hmm|mm|uhm|um)\b[,.]*", lambda m: m.group(1).capitalize() + "...", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"(?<!\.)\.\.\.(?!\.)", "...", clean)
+
+    if emotion_name in {"sad", "negative", "anxious", "affectionate"}:
+        clean = re.sub(r"([.!?])\s+(I hear you|I'm here|I understand|Let's)", r"\1 ... \2", clean)
+    elif emotion_name in {"excited", "positive"}:
+        clean = re.sub(r"([.!?])\s+(And|Now|Also)\b", r"\1 \2", clean)
+
+    return clean
+
+
+def _pause_after_phrase(phrase: str, style: Dict):
+    pause_min, pause_max = style.get("pause", (0.05, 0.22))
+    sentence_min, sentence_max = style.get("sentence_pause", (0.32, 0.62))
+    time.sleep(random.uniform(pause_min, pause_max))
+    if phrase.rstrip().endswith((".", "!", "?")):
+        time.sleep(random.uniform(sentence_min, sentence_max))
 
 
 def _can_use_online_tts() -> bool:
@@ -149,6 +351,7 @@ _engine_ready = threading.Event()
 
 _engine = None
 _resume_text: Optional[str] = None
+_resume_style: Optional[Dict] = None
 _resume_word_index: int = 0
 _current_words: List[str] = []
 _sentence_spans: List[Tuple[str, int, int]] = []
@@ -185,7 +388,7 @@ def _init_pyttsx3():
         _engine = None
         return None
 
-def _configure_pyttsx3_voice(engine, profile_name: Optional[str]):
+def _configure_pyttsx3_voice(engine, profile_name: Optional[str], style: Optional[Dict] = None):
     try:
         profile = VOICE_PROFILES.get(profile_name or _current_voice_profile)
         if not profile:
@@ -194,10 +397,13 @@ def _configure_pyttsx3_voice(engine, profile_name: Optional[str]):
         idx = profile.get('pyttsx3_index', 0)
         if isinstance(idx, int) and idx < len(voices):
             engine.setProperty('voice', voices[idx].id)
-        if 'rate' in profile:
-            engine.setProperty('rate', profile.get('rate', 190))
-        if 'volume' in profile:
-            engine.setProperty('volume', profile.get('volume', 1.0))
+        base_rate = profile.get('rate', 190)
+        rate_delta = (style or {}).get("offline_rate_delta", 0)
+        engine.setProperty('rate', _clamp_pyttsx3_rate(base_rate + rate_delta))
+
+        base_volume = float(profile.get('volume', 1.0))
+        volume_delta = _percent_to_float((style or {}).get("volume", "+0%"))
+        engine.setProperty('volume', max(0.45, min(1.0, base_volume + volume_delta)))
     except Exception as e:
         append_hud_console(f"[TTS] pyttsx3 voice config failed: {e}")
 
@@ -213,7 +419,11 @@ def _offline_worker():
             item = _offline_queue.get()
             if item is None:
                 break
-            token, phrase, profile_name = item
+            if len(item) == 4:
+                token, phrase, profile_name, style = item
+            else:
+                token, phrase, profile_name = item
+                style = EMOTION_TTS_STYLES["neutral"]
             # if playback token changed, discard this queued phrase
             if token != _playback_token:
                 continue
@@ -222,7 +432,7 @@ def _offline_worker():
             tts_playback_ping()
             try:
                 # configure voice before speaking
-                _configure_pyttsx3_voice(eng, profile_name)
+                _configure_pyttsx3_voice(eng, profile_name, style)
                 eng.say(phrase + " ")
                 eng.runAndWait()
             except Exception:
@@ -248,8 +458,9 @@ def _mark_speaking(active: bool):
         speaking = active
 
 def _reset_resume_buffers():
-    global _resume_text, _resume_word_index, _current_words, _sentence_spans
+    global _resume_text, _resume_style, _resume_word_index, _current_words, _sentence_spans
     _resume_text = None
+    _resume_style = None
     _resume_word_index = 0
     _current_words = []
     _sentence_spans = []
@@ -389,8 +600,15 @@ def _play_audio_bytes(audio_bytes: bytes, token: int):
         append_hud_console("⚠️ FFmpeg is missing! Please install FFmpeg (and add to PATH) for Edge TTS.")
         raise RuntimeError("FFmpeg missing") from e
 
-async def _edge_tts_fetch_audio(text: str, voice_name: str):
-    communicate = edge_tts.Communicate(text, voice_name)
+async def _edge_tts_fetch_audio(text: str, voice_name: str, style: Optional[Dict] = None):
+    style = style or EMOTION_TTS_STYLES["neutral"]
+    communicate = edge_tts.Communicate(
+        text,
+        voice_name,
+        rate=style.get("rate", "+0%"),
+        volume=style.get("volume", "+0%"),
+        pitch=style.get("pitch", "+0Hz"),
+    )
     audio_bytes = b""
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
@@ -398,7 +616,9 @@ async def _edge_tts_fetch_audio(text: str, voice_name: str):
     return audio_bytes
 
 # adaptive chunk size
-def _adaptive_chunk_size(words: List[str], index: int, default: int) -> int:
+def _adaptive_chunk_size(words: List[str], index: int, default: int, style: Optional[Dict] = None) -> int:
+    if style and style.get("chunk_words"):
+        default = min(default, int(style["chunk_words"]))
     w = words[index] if index < len(words) else ""
     if w.endswith(('.', '!', '?')):
         return max(3, default//2)
@@ -414,11 +634,13 @@ def _play_online_phrases(
     start_index: int = 0,
     chunk_size: int = ONLINE_CHUNK_WORDS,
     token: int = 0,
-    profile_name: Optional[str] = None
+    profile_name: Optional[str] = None,
+    style: Optional[Dict] = None,
 ) -> int:
     global stop_speaking, _last_played_word_index, _resume_word_index
     i = start_index
     voice_name = _resolve_edge_voice(profile_name)
+    style = style or EMOTION_TTS_STYLES["neutral"]
 
     while i < len(words):
         if stop_speaking or token != _playback_token:
@@ -433,11 +655,11 @@ def _play_online_phrases(
             except Exception:
                 pass
 
-        adaptive = _adaptive_chunk_size(words, i, chunk_size)
+        adaptive = _adaptive_chunk_size(words, i, chunk_size, style)
         phrase = " ".join(words[i:i+adaptive])
 
         try:
-            audio = asyncio.run(_edge_tts_fetch_audio(phrase, voice_name))
+            audio = asyncio.run(_edge_tts_fetch_audio(phrase, voice_name, style))
 
             # ✅ FIXED indentation here
             if audio is None or (hasattr(audio, "duration_seconds") and audio.duration_seconds == 0):
@@ -448,14 +670,12 @@ def _play_online_phrases(
             _play_audio_bytes(audio, token)
 
             if token == _playback_token and not stop_speaking:
-                time.sleep(random.uniform(0.05, 0.4))
-                if phrase.rstrip().endswith(('.', '!', '?')):
-                    time.sleep(random.uniform(0.4, 0.8))
+                _pause_after_phrase(phrase, style)
 
         except Exception as e:
             append_hud_console(f"⚠️ Online TTS error: {e}. Falling back to offline TTS.")
             _resume_word_index = i
-            _speak_offline_word_aware(" ".join(words), token, profile_name)
+            _speak_offline_word_aware(" ".join(words), token, profile_name, style)
             return len(words)
 
         i += adaptive
@@ -463,24 +683,35 @@ def _play_online_phrases(
 
     return len(words)
 
-def _speak_online_word_aware(text: str, token: int, profile_name: Optional[str] = None) -> bool:
-    global _resume_text, _resume_word_index
+def _speak_online_word_aware(text: str, token: int, profile_name: Optional[str] = None, style: Optional[Dict] = None) -> bool:
+    global _resume_text, _resume_style, _resume_word_index
+    style = style or _resume_style or EMOTION_TTS_STYLES["neutral"]
     _resume_text = text
+    _resume_style = style
     words = _current_words if _current_words else _split_into_words(text)
-    played_to = _play_online_phrases(words, _resume_word_index, chunk_size=ONLINE_CHUNK_WORDS, token=token, profile_name=profile_name)
+    played_to = _play_online_phrases(words, _resume_word_index, chunk_size=ONLINE_CHUNK_WORDS, token=token, profile_name=profile_name, style=style)
     if played_to >= len(words):
         _reset_resume_buffers()
         return True
     _resume_word_index = played_to
     _resume_text = text
+    _resume_style = style
     return False
 
 # Offline: queue (token, phrase, profile_name)
-def _play_offline_phrases(words: List[str], start_index: int = 0, phrase_size: int = OFFLINE_PHRASE_WORDS, token: int = 0, profile_name: Optional[str] = None) -> int:
+def _play_offline_phrases(
+    words: List[str],
+    start_index: int = 0,
+    phrase_size: int = OFFLINE_PHRASE_WORDS,
+    token: int = 0,
+    profile_name: Optional[str] = None,
+    style: Optional[Dict] = None,
+) -> int:
     global stop_speaking, _last_played_word_index
     eng = _init_pyttsx3()
     if eng is None:
         return len(words)
+    style = style or EMOTION_TTS_STYLES["neutral"]
     i = start_index
     while i < len(words):
         if stop_speaking or token != _playback_token:
@@ -492,31 +723,34 @@ def _play_offline_phrases(words: List[str], start_index: int = 0, phrase_size: i
                 set_current_spoken_sentence(sentence_here)
             except Exception:
                 pass
-        size = _adaptive_chunk_size(words, i, phrase_size)
+        size = _adaptive_chunk_size(words, i, phrase_size, style)
         phrase = " ".join(words[i:i+size])
         try:
-            _configure_pyttsx3_voice(eng, profile_name)
+            _configure_pyttsx3_voice(eng, profile_name, style)
             tts_playback_ping()
             eng.say(phrase + " ")
             eng.runAndWait()
         except Exception:
             traceback.print_exc()
             return i
-        time.sleep(random.uniform(0.02, 0.08))
+        _pause_after_phrase(phrase, style)
         i += size
         _last_played_word_index = i
     return len(words)
 
-def _speak_offline_word_aware(text: str, token: int, profile_name: Optional[str] = None) -> bool:
-    global _resume_text, _resume_word_index
+def _speak_offline_word_aware(text: str, token: int, profile_name: Optional[str] = None, style: Optional[Dict] = None) -> bool:
+    global _resume_text, _resume_style, _resume_word_index
+    style = style or _resume_style or EMOTION_TTS_STYLES["neutral"]
     _resume_text = text
+    _resume_style = style
     words = _current_words if _current_words else _split_into_words(text)
-    played_to = _play_offline_phrases(words, _resume_word_index, phrase_size=OFFLINE_PHRASE_WORDS, token=token, profile_name=profile_name)
+    played_to = _play_offline_phrases(words, _resume_word_index, phrase_size=OFFLINE_PHRASE_WORDS, token=token, profile_name=profile_name, style=style)
     if played_to >= len(words):
         _reset_resume_buffers()
         return True
     _resume_word_index = played_to
     _resume_text = text
+    _resume_style = style
     return False
 
 # Resume will clear paused state and attempt to play using current token and profile
@@ -551,9 +785,9 @@ def _resume_word_if_any() -> bool:
 
         try:
             if _can_use_online_tts():
-                result = _speak_online_word_aware(_resume_text, token, profile_name=stored_profile)
+                result = _speak_online_word_aware(_resume_text, token, profile_name=stored_profile, style=_resume_style)
             else:
-                result = _speak_offline_word_aware(_resume_text, token, profile_name=stored_profile)
+                result = _speak_offline_word_aware(_resume_text, token, profile_name=stored_profile, style=_resume_style)
 
             if result:
                 # played to end immediately
@@ -579,18 +813,21 @@ def _resume_word_if_any() -> bool:
             pass
 
 # Prepare resume maps
-def _prepare_resume_maps(text: str):
-    global _current_words, _sentence_spans, _resume_text
+def _prepare_resume_maps(text: str, style: Optional[Dict] = None):
+    global _current_words, _sentence_spans, _resume_text, _resume_style
     _resume_text = text
+    _resume_style = style
     _current_words = _split_into_words(text)
     _sentence_spans = _build_sentence_spans(text, _current_words)
 
-# --- Main speak / human_speak entrypoints now accept a voice override --------------------------------
-def speak(text: str, voice: Optional[str] = None):
+# --- Main speak / human_speak entrypoints accept voice + emotion overrides --------------------------
+def speak(text: str, voice: Optional[str] = None, emotion: Optional[str] = None):
     global stop_speaking, _tts_thread, _resume_word_index, _playback_token
     if not text or not text.strip():
         return
     with _session_lock:
+        emotion_name, style = _resolve_tts_style(text, emotion)
+        spoken_text = _humanize_for_tts(text, emotion_name)
         token = _next_playback_token()
         if _tts_thread and _tts_thread.is_alive():
             stop_speaking = True
@@ -602,10 +839,10 @@ def speak(text: str, voice: Optional[str] = None):
             _tts_thread.join(timeout=0.25)
         stop_speaking = False
         _resume_word_index = 0
-        _prepare_resume_maps(text)
+        _prepare_resume_maps(spoken_text, style)
 
         _mark_speaking(True)
-        set_last_spoken_text(text)
+        set_last_spoken_text(spoken_text)
 
         try:
             if not ALLOW_BARGE_IN:
@@ -616,11 +853,11 @@ def speak(text: str, voice: Optional[str] = None):
         def run_tts(my_token=token, profile_name=voice or _current_voice_profile):
             try:
                 if _can_use_online_tts():
-                    append_hud_console(f"🗣️ (online) {text}")
-                    _speak_online_word_aware(text, my_token, profile_name=profile_name)
+                    append_hud_console(f"🗣️ (online/{emotion_name}) {text}")
+                    _speak_online_word_aware(spoken_text, my_token, profile_name=profile_name, style=style)
                 else:
-                    append_hud_console(f"🗣️ (offline) {text}")
-                    _speak_offline_word_aware(text, my_token, profile_name=profile_name)
+                    append_hud_console(f"🗣️ (offline/{emotion_name}) {text}")
+                    _speak_offline_word_aware(spoken_text, my_token, profile_name=profile_name, style=style)
             finally:
                 _mark_speaking(False)
                 try:
@@ -633,19 +870,14 @@ def speak(text: str, voice: Optional[str] = None):
         _tts_thread.start()
 
 # Human-sounding filler + reply with optional voice
-def human_speak(answer: str, voice: Optional[str] = None):
-    filler = random.choice([
-        "Hmm...",
-        "Got it...",
-        "Let me think...",
-        "One second...",
-        "Alright...",
-    ])
+def human_speak(answer: str, voice: Optional[str] = None, emotion: Optional[str] = None):
+    emotion_name, style = _resolve_tts_style(answer, emotion)
+    filler = random.choice(style.get("filler", EMOTION_TTS_STYLES["neutral"]["filler"]))
     def run_human(my_voice=voice):
         global stop_speaking
         try:
             stop_speaking = False
-            speak(filler, voice=my_voice)
+            speak(filler, voice=my_voice, emotion=emotion_name)
             t0 = time.time()
             while speaking and (time.time() - t0) < FILLER_MAX_WAIT:
                 time.sleep(0.05)
@@ -658,8 +890,13 @@ def human_speak(answer: str, voice: Optional[str] = None):
             time.sleep(0.02)
             stop_speaking = False
             final = (answer or "").strip() or "Sorry, I don't have anything useful."
-            time.sleep(random.uniform(0.06, 0.18))
-            speak(final, voice=my_voice)
+            time.sleep(random.uniform(*style.get("pause", (0.06, 0.18))))
+            speak(final, voice=my_voice, emotion=emotion_name)
         except Exception:
             traceback.print_exc()
     threading.Thread(target=run_human, daemon=True).start()
+
+
+def emotion_speak(text: str, emotion: Optional[str] = None, voice: Optional[str] = None):
+    """Convenience wrapper for callers that want the emotion-first API."""
+    speak(text, voice=voice, emotion=emotion)
